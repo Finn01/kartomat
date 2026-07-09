@@ -16,7 +16,7 @@ This document tracks the deployment details and setup instructions for the **Kar
 1. Open your phone's browser and go to: **[https://main.kartomat.pages.dev](https://main.kartomat.pages.dev)**
 2. **On iOS (Safari)**: Tap the **Share** button (up-arrow box) $\rightarrow$ select **Add to Home Screen**.
 3. **On Android (Chrome)**: Tap the **three-dot menu** $\rightarrow$ select **Install app** (or *Add to Home Screen*).
-4. Launch Kartomat from your homescreen. The local IndexedDB database will automatically seed with the initial philosophers' deck (`lernkarten_vl_1-3.json`).
+4. Launch Kartomat from your homescreen. The local IndexedDB database starts empty. Select the "Decks" tab to import your JSON card decks and begin studying!
 
 ---
 
