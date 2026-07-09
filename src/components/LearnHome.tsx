@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { Play, Plus, Trash2, Calendar, Layers } from 'lucide-react';
 import type { LearningProgramme } from '../types';
+import { Modal } from './Modal';
 
 interface ProgrammeItemProps {
   prog: LearningProgramme;
@@ -34,11 +35,15 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
   const [isSwiping, setIsSwiping] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const itemRef = useRef<HTMLDivElement>(null);
+  const textColRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [btnMarginTop, setBtnMarginTop] = useState(0);
 
   const startXRef = useRef(0);
   const startYRef = useRef(0);
   const isSwipingRef = useRef(false);
   const offsetXRef = useRef(0);
+  const wasDraggedRef = useRef(false);
 
   // Handle slide-back when user cancels in the modal
   useEffect(() => {
@@ -47,6 +52,43 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
       offsetXRef.current = 0;
     }
   }, [deletingProgId, prog.id]);
+
+  const BUTTON_SIZE = 36;
+
+  // Push the play button as far down toward the pills row as it'll go
+  // without wrapping anything, but never past the card's own vertical
+  // center. Both the text column's height (title/deck-list line count,
+  // pill count) and the card's overall height vary with content, so this
+  // is measured rather than a fixed CSS offset.
+  //
+  // Both the text column and the button wrapper sit flush against the top
+  // of the card's *content box* (alignSelf: flex-start on both), so all
+  // measurements here are done relative to that content box, not the
+  // card's padded border box that getBoundingClientRect() reports.
+  useLayoutEffect(() => {
+    const textEl = textColRef.current;
+    const cardEl = cardRef.current;
+    if (!textEl || !cardEl) return;
+
+    const recompute = () => {
+      const cardStyles = getComputedStyle(cardEl);
+      const paddingTop = parseFloat(cardStyles.paddingTop) || 0;
+      const paddingBottom = parseFloat(cardStyles.paddingBottom) || 0;
+      const contentHeight = cardEl.getBoundingClientRect().height - paddingTop - paddingBottom;
+      const textHeight = textEl.getBoundingClientRect().height;
+
+      const maxCenter = contentHeight / 2;
+      const desiredCenter = textHeight - BUTTON_SIZE / 2;
+      const center = Math.min(desiredCenter, maxCenter);
+      setBtnMarginTop(Math.max(0, center - BUTTON_SIZE / 2));
+    };
+
+    recompute();
+    const observer = new ResizeObserver(recompute);
+    observer.observe(textEl);
+    observer.observe(cardEl);
+    return () => observer.disconnect();
+  }, [prog.name, prog.deckIds, progStats.total, progStats.due, progStats.newCards, progStats.learning]);
 
   // Handle height-collapse exit animation when user confirms in the modal
   useEffect(() => {
@@ -63,20 +105,20 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
     const el = itemRef.current;
     if (!el) return;
 
-    const handleTouchStart = (e: TouchEvent) => {
-      startXRef.current = e.touches[0].clientX;
-      startYRef.current = e.touches[0].clientY;
+    const beginGesture = (x: number, y: number) => {
+      startXRef.current = x;
+      startYRef.current = y;
       isSwipingRef.current = false;
       offsetXRef.current = 0;
     };
 
-    const handleTouchMove = (e: TouchEvent) => {
-      const diffX = e.touches[0].clientX - startXRef.current;
-      const diffY = e.touches[0].clientY - startYRef.current;
+    const updateGesture = (x: number, y: number): boolean => {
+      const diffX = x - startXRef.current;
+      const diffY = y - startYRef.current;
 
       if (!isSwipingRef.current) {
         if (Math.abs(diffY) > Math.abs(diffX)) {
-          return; // Let vertical scroll happen
+          return false; // Let vertical scroll happen
         }
         if (Math.abs(diffX) > 10) {
           isSwipingRef.current = true;
@@ -85,20 +127,20 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
       }
 
       if (isSwipingRef.current) {
-        if (e.cancelable) {
-          e.preventDefault(); // Stop page scrolling
-        }
         // Only allow swiping to the left (negative translation)
         const newOffset = diffX < 0 ? diffX : 0;
         offsetXRef.current = newOffset;
         setOffsetX(newOffset);
+        return true;
       }
+      return false;
     };
 
-    const handleTouchEnd = () => {
+    const endGesture = () => {
       setIsSwiping(false);
       if (isSwipingRef.current) {
         isSwipingRef.current = false;
+        wasDraggedRef.current = true;
         const threshold = -100;
         if (offsetXRef.current < threshold) {
           onDelete(prog.id);
@@ -109,14 +151,75 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
       }
     };
 
+    // Mouse (unlike touch) fires a native `click` after mouseup even when
+    // we called preventDefault/stopPropagation on the mousemove drag, so a
+    // cancelled swipe-to-delete would otherwise still land as a click on
+    // the card underneath and start a study session. Swallow exactly one
+    // trailing click after a real drag.
+    const handleClickCapture = (e: MouseEvent) => {
+      if (wasDraggedRef.current) {
+        wasDraggedRef.current = false;
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    };
+
+    // --- Touch (mobile) ---
+    const handleTouchStart = (e: TouchEvent) => {
+      beginGesture(e.touches[0].clientX, e.touches[0].clientY);
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      const claimed = updateGesture(e.touches[0].clientX, e.touches[0].clientY);
+      if (claimed) {
+        // Stop page/tab scroll and prevent the outer tab-swipe handler
+        // (which also listens for horizontal drags) from seeing this
+        // gesture, so deleting an item can't also swipe the whole screen.
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (isSwipingRef.current) e.stopPropagation();
+      endGesture();
+    };
+
+    // --- Mouse (desktop) ---
+    const handleMouseDown = (e: MouseEvent) => {
+      // Ignore non-primary buttons so right/middle click still works normally.
+      if (e.button !== 0) return;
+      beginGesture(e.clientX, e.clientY);
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const claimed = updateGesture(e.clientX, e.clientY);
+      if (claimed) e.stopPropagation();
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      if (isSwipingRef.current) e.stopPropagation();
+      endGesture();
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
     el.addEventListener('touchstart', handleTouchStart, { passive: true });
     el.addEventListener('touchmove', handleTouchMove, { passive: false });
     el.addEventListener('touchend', handleTouchEnd, { passive: true });
+    el.addEventListener('mousedown', handleMouseDown);
+    el.addEventListener('click', handleClickCapture, { capture: true });
 
     return () => {
       el.removeEventListener('touchstart', handleTouchStart);
       el.removeEventListener('touchmove', handleTouchMove);
       el.removeEventListener('touchend', handleTouchEnd);
+      el.removeEventListener('mousedown', handleMouseDown);
+      el.removeEventListener('click', handleClickCapture, { capture: true });
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [onDelete, prog.id]);
 
@@ -127,6 +230,11 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
         position: 'relative',
         overflow: 'hidden',
         borderRadius: '20px',
+        // Firefox can let a GPU-composited, translateX'd child (the
+        // foreground card below) bleed a sliver past the rounded corners of
+        // an `overflow: hidden` ancestor. clip-path clips composited layers
+        // correctly there, so pair it with overflow:hidden as a belt-and-braces fix.
+        clipPath: 'inset(0 round 20px)',
         maxHeight: isDeleting ? '0px' : '150px',
         opacity: isDeleting ? 0 : 1,
         marginBottom: isDeleting ? '0px' : '12px',
@@ -134,21 +242,28 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
       }}
     >
       {/* Background delete area */}
-      <div 
+      <div
         onClick={() => onDelete(prog.id)}
         style={{
           position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
+          // Inset 1px from the outer wrapper's own overflow:hidden/clipPath
+          // bounds. Firefox's compositor doesn't always clip a translated,
+          // separately-layered child (this sits behind the translateX'd
+          // foreground card) flush with an ancestor's rounded overflow
+          // clip — it can leave a 1px sliver of this div's own color
+          // showing right at the boundary. Pulling the edge in by 1px means
+          // that sliver, if it appears, is empty space instead of red.
+          top: 1,
+          left: 1,
+          right: 1,
+          bottom: 1,
           background: 'var(--color-again)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-end',
           paddingRight: '24px',
           color: '#ffffff',
-          borderRadius: '20px',
+          borderRadius: '19px',
           cursor: 'pointer',
           zIndex: 1,
         }}
@@ -170,24 +285,35 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
           position: 'relative',
         }}
       >
-        <div 
+        <div
+          ref={cardRef}
           className="glass-panel"
           style={{
-            padding: '18px 20px', 
-            display: 'flex', 
-            justifyContent: 'space-between', 
+            padding: '18px 20px',
+            display: 'flex',
+            justifyContent: 'space-between',
             alignItems: 'center',
             cursor: progStats.total > 0 ? 'pointer' : 'default',
             userSelect: 'none',
             background: 'var(--bg-surface)', // Opaque to cover red background
+            // .glass-panel normally applies `backdrop-filter: blur(16px)`,
+            // which samples pixels *behind* this element (including the
+            // red delete background right underneath) before this opaque
+            // background is painted on top. At the rounded corners, where
+            // the element's own edge is anti-aliased to fractional
+            // opacity, that blurred red bleeds through right at the seam.
+            // This card needs to be a fully opaque cover, not glass, so
+            // drop the blur entirely instead of trying to out-round it.
+            backdropFilter: 'none',
+            WebkitBackdropFilter: 'none',
           }}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div ref={textColRef} style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0, alignSelf: 'flex-start' }}>
             <h4 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{prog.name}</h4>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
               Decks: {prog.deckIds.map(id => decks?.find(d => d.id === id)?.titel || id).join(', ')}
             </p>
-            <div style={{ display: 'flex', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
               <span className="pill pill-total" style={{ fontSize: '0.7rem' }}>{progStats.total} Cards</span>
               {progStats.due > 0 && (
                 <span className="pill pill-due" style={{ fontSize: '0.7rem' }}>{progStats.due} Due</span>
@@ -201,13 +327,13 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
             </div>
           </div>
           
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', alignSelf: 'flex-start', marginTop: `${btnMarginTop}px`, transition: 'margin-top 0.2s ease' }}>
             {progStats.total > 0 && (
-              <div 
-                style={{ 
-                  width: '36px', 
-                  height: '36px', 
-                  borderRadius: '10px', 
+              <div
+                style={{
+                  width: `${BUTTON_SIZE}px`,
+                  height: `${BUTTON_SIZE}px`,
+                  borderRadius: '10px',
                   background: 'var(--color-primary)', 
                   color: '#ffffff',
                   display: 'flex',
@@ -501,8 +627,7 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
 
       {/* Create Programme Modal */}
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <Modal onClose={() => setShowCreateModal(false)}>
             <h3 style={{ fontSize: '1.25rem', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Layers size={20} style={{ color: 'var(--color-primary)' }} />
               Create Learning Programme
@@ -624,13 +749,11 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
       {/* Delete Confirmation Modal */}
       {deletingProgId !== null && (
-        <div className="modal-overlay" onClick={() => setDeletingProgId(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+        <Modal onClose={() => setDeletingProgId(null)} contentStyle={{ maxWidth: '420px' }}>
             <h3 style={{ fontSize: '1.25rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-again)' }}>
               <Trash2 size={20} />
               Delete Programme
@@ -667,8 +790,7 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
                 {deleteDelayRemaining > 0 ? `Delete (${deleteDelayRemaining}s)` : 'Delete'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
     </div>

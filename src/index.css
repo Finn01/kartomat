@@ -748,6 +748,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .tabs-slider-track {
   display: flex;
+  align-items: flex-start;
   width: 200%;
   will-change: transform;
 }

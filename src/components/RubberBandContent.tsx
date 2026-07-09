@@ -13,14 +13,40 @@ export const RubberBandContent: React.FC<RubberBandContentProps> = ({ children, 
   const startYRef = useRef(0);
   const touchStateRef = useRef<'idle' | 'pulling-down' | 'pulling-up'>('idle');
   const lastYRef = useRef(0);
+  const isTouchActiveRef = useRef(false);
 
   useEffect(() => {
     const el = contentRef.current;
     if (!el || disabled) return;
 
+    // Native momentum scrolling can carry scrollTop to a boundary *after* the
+    // last touchmove has already fired (finger lifted, inertia still running).
+    // Since the idle->pulling transition below only ever runs inside a
+    // touchmove handler, that case would otherwise be missed until a brand
+    // new gesture starts. Tracking the boundary via `scroll` (which keeps
+    // firing during momentum) lets us arm the pulling state the instant the
+    // boundary is crossed, so if the finger is still down we catch it on the
+    // very next touchmove instead of requiring a fresh gesture.
+    const handleScroll = () => {
+      if (!isTouchActiveRef.current || touchStateRef.current !== 'idle') return;
+
+      const scrollTop = window.scrollY || document.documentElement.scrollTop;
+      const scrollHeight = document.documentElement.scrollHeight;
+      const clientHeight = document.documentElement.clientHeight;
+
+      if (scrollTop <= 0) {
+        touchStateRef.current = 'pulling-down';
+        startYRef.current = lastYRef.current;
+      } else if (scrollTop + clientHeight >= scrollHeight - 1) {
+        touchStateRef.current = 'pulling-up';
+        startYRef.current = lastYRef.current;
+      }
+    };
+
     const handleTouchStart = (e: TouchEvent) => {
       startYRef.current = e.touches[0].clientY;
       lastYRef.current = e.touches[0].clientY;
+      isTouchActiveRef.current = true;
       setIsTransitioning(false);
 
       const scrollTop = window.scrollY || document.documentElement.scrollTop;
@@ -81,6 +107,7 @@ export const RubberBandContent: React.FC<RubberBandContentProps> = ({ children, 
     };
 
     const handleTouchEnd = () => {
+      isTouchActiveRef.current = false;
       setIsTransitioning(true);
       setTranslateY(0);
       touchStateRef.current = 'idle';
@@ -89,11 +116,13 @@ export const RubberBandContent: React.FC<RubberBandContentProps> = ({ children, 
     window.addEventListener('touchstart', handleTouchStart, { passive: true });
     window.addEventListener('touchmove', handleTouchMove, { passive: false });
     window.addEventListener('touchend', handleTouchEnd, { passive: true });
+    window.addEventListener('scroll', handleScroll, { passive: true });
 
     return () => {
       window.removeEventListener('touchstart', handleTouchStart);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('scroll', handleScroll);
     };
   }, [disabled]);
 

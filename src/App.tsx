@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from './db';
 import { LearnHome } from './components/LearnHome';
@@ -28,6 +28,40 @@ function App() {
   const tabStartYRef = useRef(0);
   const isSwipingTabsRef = useRef(false);
   const tabOffsetRef = useRef(0);
+
+  // Both tab pages live side-by-side in a flex row so they can be dragged
+  // together during a swipe; a flex row's height is always the tallest
+  // child, so without this the row (and page scroll height) would be
+  // pinned to whichever tab has more content even while the other, shorter
+  // tab is the one showing — leaving scrollable blank space beneath it.
+  // Measuring each page's own height and applying only the active one's
+  // height to the container keeps scroll bounded to what's actually visible.
+  const learnPageRef = useRef<HTMLDivElement>(null);
+  const decksPageRef = useRef<HTMLDivElement>(null);
+  const [learnPageHeight, setLearnPageHeight] = useState<number | null>(null);
+  const [decksPageHeight, setDecksPageHeight] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const learnEl = learnPageRef.current;
+    const decksEl = decksPageRef.current;
+    if (!learnEl || !decksEl) return;
+
+    const learnObserver = new ResizeObserver(entries => {
+      setLearnPageHeight(entries[0].contentRect.height);
+    });
+    const decksObserver = new ResizeObserver(entries => {
+      setDecksPageHeight(entries[0].contentRect.height);
+    });
+    learnObserver.observe(learnEl);
+    decksObserver.observe(decksEl);
+
+    return () => {
+      learnObserver.disconnect();
+      decksObserver.disconnect();
+    };
+  }, []);
+
+  const activePageHeight = activeTab === 'learn' ? learnPageHeight : decksPageHeight;
 
   // Study Session Entry/Exit State
   const [sessionState, setSessionState] = useState<'closed' | 'entering' | 'active' | 'exiting'>('closed');
@@ -230,18 +264,25 @@ function App() {
         </div>
 
         {/* Tab Pages with Slider Swipe Gestures */}
-        <div ref={sliderContainerRef} className="tabs-slider-container">
-          <div 
+        <div
+          ref={sliderContainerRef}
+          className="tabs-slider-container"
+          style={{
+            height: activePageHeight != null ? `${activePageHeight}px` : 'auto',
+            transition: isSwipingTabs ? 'none' : 'height 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
+          }}
+        >
+          <div
             className="tabs-slider-track"
             style={{
               transform: `translate3d(${(activeTab === 'learn' ? 0 : -50) + (tabSwipeOffset / (window.innerWidth || 375)) * 50}%, 0, 0)`,
               transition: isSwipingTabs ? 'none' : 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
             }}
           >
-            <div className="tab-page-wrapper">
+            <div className="tab-page-wrapper" ref={learnPageRef}>
               <LearnHome onStartSession={handleStartSession} />
             </div>
-            <div className="tab-page-wrapper">
+            <div className="tab-page-wrapper" ref={decksPageRef}>
               <DeckList />
             </div>
           </div>
