@@ -251,20 +251,4 @@ export async function exportDeckJson(deckId: string, includeProgress: boolean): 
   return JSON.stringify(exportObj, null, 2);
 }
 
-/**
- * Seeds the database from the public deck JSON file on first run.
- */
-export async function seedDatabaseIfEmpty() {
-  const deckCount = await db.decks.count();
-  if (deckCount > 0) return;
 
-  try {
-    const response = await fetch('/lernkarten_vl_1-3.json');
-    if (!response.ok) throw new Error('Failed to fetch seed data');
-    const data = await response.json();
-    await importDeckJson(data);
-    console.log('Database successfully seeded with lernkarten_vl_1-3.json');
-  } catch (error) {
-    console.error('Failed to seed database:', error);
-  }
-}

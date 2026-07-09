@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, seedDatabaseIfEmpty } from './db';
+import { db } from './db';
 import { LearnHome } from './components/LearnHome';
 import { DeckList } from './components/DeckList';
 import { StudySession } from './components/StudySession';
@@ -22,11 +22,6 @@ function App() {
     needRefresh: [needRefresh],
     updateServiceWorker
   } = useRegisterSW();
-
-  // Auto-seed database from public JSON file on first mount
-  useEffect(() => {
-    seedDatabaseIfEmpty();
-  }, []);
 
   // Fetch data to display real-time global due counts in header
   const cards = useLiveQuery(() => db.cards.toArray());
