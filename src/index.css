@@ -108,7 +108,7 @@ h1, h2, h3, h4, h5, h6 {
   max-width: 800px;
   margin: 0 auto;
   /* Respect phone safe-zones (notch top, home indicator bottom, side offsets) */
-  padding-top: calc(12px + env(safe-area-inset-top, 0px));
+  padding-top: 0;
   padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
   padding-left: calc(16px + env(safe-area-inset-left, 0px));
   padding-right: calc(16px + env(safe-area-inset-right, 0px));
@@ -138,10 +138,21 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Premium Navigation Header */
 .app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 24px 0 16px 0;
+  padding-top: calc(8px + env(safe-area-inset-top, 0px));
+  padding-bottom: 12px;
+  padding-left: calc(16px + env(safe-area-inset-left, 0px));
+  padding-right: calc(16px + env(safe-area-inset-right, 0px));
+  margin-left: calc(-16px - env(safe-area-inset-left, 0px));
+  margin-right: calc(-16px - env(safe-area-inset-right, 0px));
+  background: rgba(8, 9, 13, 0.85);
+  backdrop-filter: blur(var(--backdrop-blur));
+  -webkit-backdrop-filter: blur(var(--backdrop-blur));
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 24px;
 }
@@ -447,13 +458,14 @@ h1, h2, h3, h4, h5, h6 {
 .flashcard-3d {
   position: relative;
   width: 100%;
+  box-sizing: border-box;
   background: var(--bg-card);
   backdrop-filter: blur(var(--backdrop-blur));
   -webkit-backdrop-filter: blur(var(--backdrop-blur));
   border: 1px solid var(--border-color);
   border-radius: 28px;
   box-shadow: var(--shadow-lg);
-  padding: 32px 24px;
+  padding: 24px;
   min-height: 380px;
   display: flex;
   flex-direction: column;
@@ -463,7 +475,7 @@ h1, h2, h3, h4, h5, h6 {
 
 @media (min-width: 640px) {
   .flashcard-3d {
-    padding: 40px 32px;
+    padding: 32px;
   }
 }
 
@@ -476,7 +488,7 @@ h1, h2, h3, h4, h5, h6 {
   border-color: rgba(139, 92, 246, 0.3);
 }
 
-/* Header inside card */
+/* Header inside card (non-sticky) */
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -688,4 +700,94 @@ h1, h2, h3, h4, h5, h6 {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-secondary);
   border: 1px solid var(--border-color);
+}
+
+/* Mobile Text Selection Restraint */
+@media (max-width: 768px) {
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  
+  /* Allow selection specifically in the studying flashcard text */
+  .flashcard-3d, .flashcard-3d * {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  
+  /* Retain selection for standard form inputs/controls */
+  input, textarea, [contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+/* Tab Slider & Swipe Layout */
+.tabs-slider-container {
+  overflow: hidden;
+  width: 100%;
+  position: relative;
+}
+
+.tabs-slider-track {
+  display: flex;
+  width: 200%;
+  will-change: transform;
+}
+
+.tab-page-wrapper {
+  width: 50%;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+/* Study Session Entry/Exit Overlay */
+.study-session-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 200;
+  background-color: var(--bg-app);
+  will-change: transform;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  transform: translateY(100%);
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.study-session-overlay.entering {
+  transform: translateY(100%);
+}
+
+.study-session-overlay.active {
+  transform: translateY(0);
+}
+
+.study-session-overlay.exiting {
+  transform: translateY(100%);
+}
+
+.study-session-overlay.closed {
+  display: none;
+}
+
+/* Flashcard Answer Panel Reveal */
+.card-answer-panel {
+  box-sizing: border-box;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 16px;
+  overflow: hidden;
+  will-change: max-height, opacity, padding, margin;
+  transition: max-height 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.3s ease,
+              padding 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+              margin-top 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.4s ease;
+}
+
+.flashcard-3d {
+  transition: min-height 0.4s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s ease, box-shadow 0.3s ease;
 }

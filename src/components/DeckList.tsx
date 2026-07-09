@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, importDeckJson, exportDeckJson } from '../db';
-import { Folder, Upload, BookOpen, Layers, CheckCircle2, AlertCircle, Sparkles, Share2, Download } from 'lucide-react';
+import { Folder, Upload, BookOpen, Layers, CheckCircle2, AlertCircle, Share2, Download } from 'lucide-react';
 
 interface DeckListProps {
   onSelectDeck?: (deckId: string) => void; // Optional if we want deck drilling
@@ -112,7 +112,7 @@ export const DeckList: React.FC<DeckListProps> = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-      {/* Introduction Banner */}
+      {/* Introduction Banner - Hidden for now
       <div className="glass-panel" style={{ padding: '24px', display: 'flex', gap: '16px', alignItems: 'center', background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(6, 182, 212, 0.08) 100%)' }}>
         <div style={{ padding: '12px', borderRadius: '12px', background: 'rgba(139, 92, 246, 0.1)', color: 'var(--color-primary)' }}>
           <Sparkles size={24} />
@@ -124,6 +124,7 @@ export const DeckList: React.FC<DeckListProps> = () => {
           </p>
         </div>
       </div>
+      */}
 
       {/* Decks Grid */}
       <div>

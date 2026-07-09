@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from './db';
 import { LearnHome } from './components/LearnHome';
@@ -9,15 +9,95 @@ import { Settings, Sparkles, Layers, GraduationCap, Check } from 'lucide-react';
 import { deriveFSRSSettings } from './fsrs';
 import type { FSRSSettings } from './types';
 import { useRegisterSW } from 'virtual:pwa-register/react';
+import { RubberBandContent } from './components/RubberBandContent';
 
 function App() {
   const [activeTab, setActiveTab] = useState<'learn' | 'decks'>('learn');
-  const [isStudying, setIsStudying] = useState(false);
   const [sessionDeckIds, setSessionDeckIds] = useState<string[] | null>(null);
   const [customFSRSSettings, setCustomFSRSSettings] = useState<FSRSSettings | undefined>(undefined);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isUpdatingPWA, setIsUpdatingPWA] = useState(false);
   const [showUpdateSuccess, setShowUpdateSuccess] = useState(false);
+
+  // Swipe tab states
+  const [tabSwipeOffset, setTabSwipeOffset] = useState(0);
+  const [isSwipingTabs, setIsSwipingTabs] = useState(false);
+  const sliderContainerRef = useRef<HTMLDivElement>(null);
+
+  const tabStartXRef = useRef(0);
+  const tabStartYRef = useRef(0);
+  const isSwipingTabsRef = useRef(false);
+  const tabOffsetRef = useRef(0);
+
+  // Study Session Entry/Exit State
+  const [sessionState, setSessionState] = useState<'closed' | 'entering' | 'active' | 'exiting'>('closed');
+
+  useEffect(() => {
+    const el = sliderContainerRef.current;
+    if (!el || sessionState !== 'closed') return;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      tabStartXRef.current = e.touches[0].clientX;
+      tabStartYRef.current = e.touches[0].clientY;
+      isSwipingTabsRef.current = false;
+      tabOffsetRef.current = 0;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      const diffX = e.touches[0].clientX - tabStartXRef.current;
+      const diffY = e.touches[0].clientY - tabStartYRef.current;
+
+      if (!isSwipingTabsRef.current) {
+        if (Math.abs(diffY) > Math.abs(diffX)) {
+          return; // Let vertical scroll happen
+        }
+        if (Math.abs(diffX) > 15) {
+          isSwipingTabsRef.current = true;
+          setIsSwipingTabs(true);
+        }
+      }
+
+      if (isSwipingTabsRef.current) {
+        if (e.cancelable) {
+          e.preventDefault();
+        }
+        let newOffset = diffX;
+        // Resistive bounds pull
+        if (activeTab === 'learn' && diffX > 0) {
+          newOffset = diffX * 0.2;
+        } else if (activeTab === 'decks' && diffX < 0) {
+          newOffset = diffX * 0.2;
+        }
+        tabOffsetRef.current = newOffset;
+        setTabSwipeOffset(newOffset);
+      }
+    };
+
+    const handleTouchEnd = () => {
+      setIsSwipingTabs(false);
+      if (isSwipingTabsRef.current) {
+        isSwipingTabsRef.current = false;
+        const threshold = window.innerWidth * 0.2;
+        if (activeTab === 'learn' && tabOffsetRef.current < -threshold) {
+          setActiveTab('decks');
+        } else if (activeTab === 'decks' && tabOffsetRef.current > threshold) {
+          setActiveTab('learn');
+        }
+        setTabSwipeOffset(0);
+        tabOffsetRef.current = 0;
+      }
+    };
+
+    el.addEventListener('touchstart', handleTouchStart, { passive: true });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [activeTab, sessionState]);
 
   // Check if we just installed an update
   useEffect(() => {
@@ -71,7 +151,19 @@ function App() {
       setCustomFSRSSettings(undefined);
     }
     setSessionDeckIds(deckIds);
-    setIsStudying(true);
+    setSessionState('entering');
+    setTimeout(() => {
+      setSessionState('active');
+    }, 40);
+  };
+
+  const handleCloseSession = () => {
+    setSessionState('exiting');
+    setTimeout(() => {
+      setSessionState('closed');
+      setSessionDeckIds(null);
+      setCustomFSRSSettings(undefined);
+    }, 400); // matches the overlay slide transition duration
   };
 
   return (
@@ -79,14 +171,14 @@ function App() {
       
       {/* Premium Navigation Header */}
       <header className="app-header">
-        <a href="/" className="app-logo" onClick={(e) => { e.preventDefault(); setIsStudying(false); }}>
+        <a href="/" className="app-logo" onClick={(e) => { e.preventDefault(); handleCloseSession(); }}>
           <img src="/icon.svg" alt="Kartomat Logo" />
           <h1>Kartomat</h1>
         </a>
 
         <div className="nav-actions">
           {/* Due Count Indicator */}
-          {globalDueCount > 0 && !isStudying && (
+          {globalDueCount > 0 && (
             <div 
               className="pill pill-due" 
               style={{ 
@@ -118,39 +210,55 @@ function App() {
       </header>
 
       {/* Main Content Area */}
-      {isStudying ? (
-        <StudySession 
-          deckIds={sessionDeckIds} 
-          customFSRSSettings={customFSRSSettings}
-          onClose={() => setIsStudying(false)} 
-        />
-      ) : (
-        <>
-          {/* Segmented Tab Switcher */}
-          <div className="tab-switcher">
-            <button 
-              className={`tab-btn ${activeTab === 'learn' ? 'active' : ''}`}
-              onClick={() => setActiveTab('learn')}
-            >
-              <GraduationCap size={18} />
-              Learn
-            </button>
-            <button 
-              className={`tab-btn ${activeTab === 'decks' ? 'active' : ''}`}
-              onClick={() => setActiveTab('decks')}
-            >
-              <Layers size={18} />
-              Decks
-            </button>
-          </div>
+      <RubberBandContent>
+        {/* Segmented Tab Switcher */}
+        <div className="tab-switcher">
+          <button 
+            className={`tab-btn ${activeTab === 'learn' ? 'active' : ''}`}
+            onClick={() => setActiveTab('learn')}
+          >
+            <GraduationCap size={18} />
+            Learn
+          </button>
+          <button 
+            className={`tab-btn ${activeTab === 'decks' ? 'active' : ''}`}
+            onClick={() => setActiveTab('decks')}
+          >
+            <Layers size={18} />
+            Decks
+          </button>
+        </div>
 
-          {/* Tab Pages */}
-          {activeTab === 'learn' ? (
-            <LearnHome onStartSession={handleStartSession} />
-          ) : (
-            <DeckList />
-          )}
-        </>
+        {/* Tab Pages with Slider Swipe Gestures */}
+        <div ref={sliderContainerRef} className="tabs-slider-container">
+          <div 
+            className="tabs-slider-track"
+            style={{
+              transform: `translate3d(${(activeTab === 'learn' ? 0 : -50) + (tabSwipeOffset / (window.innerWidth || 375)) * 50}%, 0, 0)`,
+              transition: isSwipingTabs ? 'none' : 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1)',
+            }}
+          >
+            <div className="tab-page-wrapper">
+              <LearnHome onStartSession={handleStartSession} />
+            </div>
+            <div className="tab-page-wrapper">
+              <DeckList />
+            </div>
+          </div>
+        </div>
+      </RubberBandContent>
+
+      {/* Fixed Overlay Study Session */}
+      {sessionState !== 'closed' && (
+        <div className={`study-session-overlay ${sessionState}`}>
+          <div className="app-container" style={{ minHeight: 'auto', paddingTop: '12px' }}>
+            <StudySession 
+              deckIds={sessionDeckIds} 
+              customFSRSSettings={customFSRSSettings}
+              onClose={handleCloseSession} 
+            />
+          </div>
+        </div>
       )}
 
       {/* Settings Modal */}

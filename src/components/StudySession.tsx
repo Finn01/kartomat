@@ -200,35 +200,49 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       
-      {/* Session Progress Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <button 
-          onClick={onClose} 
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.9rem', padding: '4px 0' }}
-        >
-          <X size={16} /> Exit Session
-        </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-            Remaining: {queue.length}
-          </span>
-          <span style={{ fontSize: '0.85rem', color: 'var(--color-good)', fontWeight: 600 }}>
-            Completed: {completedCount}
-          </span>
+      {/* Sticky Session Progress Header */}
+      <div style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 10,
+        background: 'var(--bg-app)',
+        paddingTop: '12px',
+        paddingBottom: '12px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+        borderBottom: '1px solid var(--border-color)',
+        marginBottom: '4px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button 
+            onClick={onClose} 
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.9rem', padding: '4px 0' }}
+          >
+            <X size={16} /> Exit Session
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+              Remaining: {queue.length}
+            </span>
+            <span style={{ fontSize: '0.85rem', color: 'var(--color-good)', fontWeight: 600 }}>
+              Completed: {completedCount}
+            </span>
+          </div>
         </div>
-      </div>
 
-      {/* Progress Bar */}
-      <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '99px', overflow: 'hidden' }}>
-        <div 
-          style={{ 
-            height: '100%', 
-            width: `${progressPercent}%`, 
-            background: 'linear-gradient(90deg, var(--color-primary), var(--color-secondary))',
-            borderRadius: '99px',
-            transition: 'width 0.3s ease'
-          }} 
-        />
+        {/* Progress Bar */}
+        <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '99px', overflow: 'hidden' }}>
+          <div 
+            style={{ 
+              height: '100%', 
+              width: `${progressPercent}%`, 
+              background: 'linear-gradient(90deg, var(--color-primary), var(--color-secondary))',
+              borderRadius: '99px',
+              transition: 'width 0.3s ease'
+            }} 
+          />
+        </div>
       </div>
 
       {/* Flashcard container */}

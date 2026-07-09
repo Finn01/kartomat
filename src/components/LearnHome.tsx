@@ -1,8 +1,230 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { Play, Plus, Trash2, Calendar, Layers, CheckCircle2, ChevronRight } from 'lucide-react';
+import { Play, Plus, Trash2, Calendar, Layers } from 'lucide-react';
 import type { LearningProgramme } from '../types';
+
+interface ProgrammeItemProps {
+  prog: LearningProgramme;
+  decks: any[] | undefined;
+  onStartSession: (deckIds: string[] | null, programmeId?: string) => void;
+  onDelete: (id: string) => void;
+  onDeleteComplete: (id: string) => void;
+  progStats: {
+    due: number;
+    newCards: number;
+    learning: number;
+    total: number;
+  };
+  deletingProgId: string | null;
+  confirmedDeletingId: string | null;
+}
+
+const ProgrammeItem: React.FC<ProgrammeItemProps> = ({ 
+  prog, 
+  decks, 
+  onStartSession, 
+  onDelete, 
+  onDeleteComplete,
+  progStats,
+  deletingProgId,
+  confirmedDeletingId
+}) => {
+  const [offsetX, setOffsetX] = useState(0);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const itemRef = useRef<HTMLDivElement>(null);
+
+  const startXRef = useRef(0);
+  const startYRef = useRef(0);
+  const isSwipingRef = useRef(false);
+  const offsetXRef = useRef(0);
+
+  // Handle slide-back when user cancels in the modal
+  useEffect(() => {
+    if (deletingProgId !== prog.id && offsetXRef.current !== 0) {
+      setOffsetX(0);
+      offsetXRef.current = 0;
+    }
+  }, [deletingProgId, prog.id]);
+
+  // Handle height-collapse exit animation when user confirms in the modal
+  useEffect(() => {
+    if (confirmedDeletingId === prog.id) {
+      setIsDeleting(true);
+      const timer = setTimeout(() => {
+        onDeleteComplete(prog.id);
+      }, 300); // matches the transition collapse duration
+      return () => clearTimeout(timer);
+    }
+  }, [confirmedDeletingId, prog.id, onDeleteComplete]);
+
+  useEffect(() => {
+    const el = itemRef.current;
+    if (!el) return;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      startXRef.current = e.touches[0].clientX;
+      startYRef.current = e.touches[0].clientY;
+      isSwipingRef.current = false;
+      offsetXRef.current = 0;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      const diffX = e.touches[0].clientX - startXRef.current;
+      const diffY = e.touches[0].clientY - startYRef.current;
+
+      if (!isSwipingRef.current) {
+        if (Math.abs(diffY) > Math.abs(diffX)) {
+          return; // Let vertical scroll happen
+        }
+        if (Math.abs(diffX) > 10) {
+          isSwipingRef.current = true;
+          setIsSwiping(true);
+        }
+      }
+
+      if (isSwipingRef.current) {
+        if (e.cancelable) {
+          e.preventDefault(); // Stop page scrolling
+        }
+        // Only allow swiping to the left (negative translation)
+        const newOffset = diffX < 0 ? diffX : 0;
+        offsetXRef.current = newOffset;
+        setOffsetX(newOffset);
+      }
+    };
+
+    const handleTouchEnd = () => {
+      setIsSwiping(false);
+      if (isSwipingRef.current) {
+        isSwipingRef.current = false;
+        const threshold = -100;
+        if (offsetXRef.current < threshold) {
+          onDelete(prog.id);
+        } else {
+          setOffsetX(0);
+          offsetXRef.current = 0;
+        }
+      }
+    };
+
+    el.addEventListener('touchstart', handleTouchStart, { passive: true });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [onDelete, prog.id]);
+
+  return (
+    <div 
+      ref={itemRef}
+      style={{
+        position: 'relative',
+        overflow: 'hidden',
+        borderRadius: '20px',
+        maxHeight: isDeleting ? '0px' : '150px',
+        opacity: isDeleting ? 0 : 1,
+        marginBottom: isDeleting ? '0px' : '12px',
+        transition: 'max-height 0.3s ease, opacity 0.3s ease, margin 0.3s ease',
+      }}
+    >
+      {/* Background delete area */}
+      <div 
+        onClick={() => onDelete(prog.id)}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'var(--color-again)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          paddingRight: '24px',
+          color: '#ffffff',
+          borderRadius: '20px',
+          cursor: 'pointer',
+          zIndex: 1,
+        }}
+      >
+        <Trash2 size={20} />
+      </div>
+
+      {/* Foreground card */}
+      <div
+        onClick={() => {
+          if (offsetX === 0 && progStats.total > 0) {
+            onStartSession(prog.deckIds, prog.id);
+          }
+        }}
+        style={{
+          transform: `translateX(${offsetX}px)`,
+          transition: isSwiping ? 'none' : 'transform 0.2s ease',
+          zIndex: 2,
+          position: 'relative',
+        }}
+      >
+        <div 
+          className="glass-panel"
+          style={{
+            padding: '18px 20px', 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            cursor: progStats.total > 0 ? 'pointer' : 'default',
+            userSelect: 'none',
+            background: 'var(--bg-surface)', // Opaque to cover red background
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <h4 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{prog.name}</h4>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              Decks: {prog.deckIds.map(id => decks?.find(d => d.id === id)?.titel || id).join(', ')}
+            </p>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+              <span className="pill pill-total" style={{ fontSize: '0.7rem' }}>{progStats.total} Cards</span>
+              {progStats.due > 0 && (
+                <span className="pill pill-due" style={{ fontSize: '0.7rem' }}>{progStats.due} Due</span>
+              )}
+              {progStats.newCards > 0 && (
+                <span className="pill" style={{ fontSize: '0.7rem', background: 'rgba(6, 182, 212, 0.1)', color: 'var(--color-secondary)', border: '1px solid rgba(6, 182, 212, 0.3)' }}>{progStats.newCards} New</span>
+              )}
+              {progStats.learning > 0 && (
+                <span className="pill" style={{ fontSize: '0.7rem', background: 'var(--color-primary-glow)', color: 'var(--color-primary)', border: '1px solid rgba(139, 92, 246, 0.3)' }}>{progStats.learning} Learning</span>
+              )}
+            </div>
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {progStats.total > 0 && (
+              <div 
+                style={{ 
+                  width: '36px', 
+                  height: '36px', 
+                  borderRadius: '10px', 
+                  background: 'var(--color-primary)', 
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 12px var(--color-primary-glow)'
+                }}
+              >
+                <Play size={16} fill="currentColor" style={{ marginLeft: '2px' }} />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 interface LearnHomeProps {
   onStartSession: (deckIds: string[] | null, programmeId?: string) => void;
@@ -15,6 +237,28 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
   const [targetRetention, setTargetRetention] = useState(0.90);
   const [hasDeadline, setHasDeadline] = useState(false);
   const [deadlineDate, setDeadlineDate] = useState('');
+
+  // States for delete confirmation modal & countdown
+  const [deletingProgId, setDeletingProgId] = useState<string | null>(null);
+  const [confirmedDeletingId, setConfirmedDeletingId] = useState<string | null>(null);
+  const [deleteDelayRemaining, setDeleteDelayRemaining] = useState(0);
+
+  useEffect(() => {
+    if (deletingProgId === null) return;
+    
+    setDeleteDelayRemaining(3);
+    const interval = setInterval(() => {
+      setDeleteDelayRemaining(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [deletingProgId]);
 
   const decks = useLiveQuery(() => db.decks.toArray());
   const cards = useLiveQuery(() => db.cards.toArray());
@@ -61,11 +305,12 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
 
   // Calculate stats for a specific set of decks (e.g. for a programme)
   const getDeckSetStats = (deckIds: string[]) => {
-    if (!cards || !progressList) return { due: 0, newCards: 0, total: 0 };
+    if (!cards || !progressList) return { due: 0, newCards: 0, learning: 0, total: 0 };
     const filteredCards = cards.filter(c => deckIds.includes(c.deckId));
     
     let due = 0;
     let newCards = 0;
+    let learning = 0;
     const now = new Date();
 
     for (const card of filteredCards) {
@@ -74,11 +319,14 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
         newCards++;
       } else {
         const isDue = new Date(prog.due) <= now;
+        if (prog.state === 1 || prog.state === 3) {
+          learning++;
+        }
         if (isDue) due++;
       }
     }
 
-    return { due, newCards, total: filteredCards.length };
+    return { due, newCards, learning, total: filteredCards.length };
   };
 
   const handleCreateProgramme = async (e: React.FormEvent) => {
@@ -114,11 +362,13 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
     }
   };
 
-  const handleDeleteProgramme = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirm('Are you sure you want to delete this learning programme?')) {
-      await db.programmes.delete(id);
-    }
+  const handleDeleteRequest = (id: string) => {
+    setDeletingProgId(id);
+  };
+
+  const handleDeleteComplete = async (id: string) => {
+    await db.programmes.delete(id);
+    setConfirmedDeletingId(null);
   };
 
   return (
@@ -166,36 +416,41 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
         </div>
       </div>
 
-      {/* Global Session Action */}
-      <div className="glass-panel" style={{ padding: '28px', textAlign: 'center', background: 'linear-gradient(135deg, rgba(20, 21, 33, 0.7) 0%, rgba(139, 92, 246, 0.08) 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-        <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'var(--color-primary-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-primary)' }}>
-          <Play size={24} fill="currentColor" style={{ marginLeft: '4px' }} />
-        </div>
-        <div>
-          <h2 style={{ fontSize: '1.35rem', marginBottom: '6px' }}>Start Global Learning Session</h2>
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', maxWidth: '500px', margin: '0 auto' }}>
-            Study all due cards and introduce new cards from all decks in the database.
-          </p>
-        </div>
-        
-        {stats.total === 0 ? (
-          <button className="btn btn-primary" disabled style={{ opacity: 0.5, cursor: 'not-allowed' }}>
-            No cards available
-          </button>
-        ) : stats.due === 0 && stats.newCards === 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <span style={{ fontSize: '0.9rem', color: 'var(--color-good)', display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
-              <CheckCircle2 size={16} /> All caught up for today!
-            </span>
-            <button className="btn btn-secondary" onClick={() => onStartSession(null)}>
-              Review anyway (Custom Study)
+      {/* Minimal Global Study Action Panel */}
+      <div style={{ display: 'flex', justifyContent: 'center', width: '100%', marginBottom: '8px' }}>
+        <div 
+          className="glass-panel" 
+          style={{ 
+            padding: '20px 24px', 
+            display: 'flex', 
+            flexDirection: 'column', 
+            alignItems: 'center', 
+            gap: '14px',
+            width: '100%',
+            maxWidth: '380px',
+            background: 'var(--bg-surface)',
+            borderColor: 'var(--border-color)',
+            boxShadow: 'var(--shadow-md)',
+          }}
+        >
+          {stats.total === 0 ? (
+            <button className="btn btn-primary" disabled style={{ opacity: 0.5, cursor: 'not-allowed', width: '100%' }}>
+              <Play size={16} fill="currentColor" />
+              Start Studying
             </button>
+          ) : (
+            <button className="btn btn-primary" onClick={() => onStartSession(null)} style={{ width: '100%' }}>
+              <Play size={16} fill="currentColor" />
+              Start Studying
+            </button>
+          )}
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <span className="pill pill-due" style={{ fontSize: '0.8rem', padding: '4px 12px' }}>{stats.due} Due</span>
+            <span className="pill" style={{ fontSize: '0.8rem', padding: '4px 12px', background: 'rgba(6, 182, 212, 0.1)', color: 'var(--color-secondary)', border: '1px solid rgba(6, 182, 212, 0.3)' }}>
+              {stats.newCards} New
+            </span>
           </div>
-        ) : (
-          <button className="btn btn-primary" onClick={() => onStartSession(null)}>
-            Start Studying ({stats.due} Due + {Math.min(stats.newCards, 15)} New)
-          </button>
-        )}
+        </div>
       </div>
 
       {/* Learning Programmes Section */}
@@ -227,55 +482,17 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
             {programmes.map(prog => {
               const progStats = getDeckSetStats(prog.deckIds);
               return (
-                <div 
-                  key={prog.id} 
-                  className="glass-panel" 
-                  onClick={() => progStats.total > 0 && onStartSession(prog.deckIds, prog.id)}
-                  style={{ 
-                    padding: '18px 20px', 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'center',
-                    cursor: progStats.total > 0 ? 'pointer' : 'default',
-                    transition: 'all 0.2s ease',
-                  }}
-                >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <h4 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{prog.name}</h4>
-                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      Decks: {prog.deckIds.map(id => decks?.find(d => d.id === id)?.titel || id).join(', ')}
-                    </p>
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                      <span className="pill pill-total" style={{ fontSize: '0.7rem' }}>{progStats.total} Cards</span>
-                      {progStats.due > 0 && (
-                        <span className="pill pill-due" style={{ fontSize: '0.7rem' }}>{progStats.due} Due</span>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    {progStats.total > 0 && (
-                      <div className="btn btn-icon" style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(255,255,255,0.03)', border: 'none', color: 'var(--color-primary)' }}>
-                        <ChevronRight size={18} />
-                      </div>
-                    )}
-                    <button 
-                      className="btn btn-icon" 
-                      onClick={(e) => handleDeleteProgramme(prog.id, e)}
-                      style={{ 
-                        width: '36px', 
-                        height: '36px', 
-                        borderRadius: '8px', 
-                        color: 'var(--text-muted)',
-                        background: 'transparent',
-                        border: 'none',
-                      }}
-                      title="Delete Programme"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
+                <ProgrammeItem 
+                  key={prog.id}
+                  prog={prog}
+                  decks={decks}
+                  onStartSession={onStartSession}
+                  onDelete={handleDeleteRequest}
+                  onDeleteComplete={handleDeleteComplete}
+                  progStats={progStats}
+                  deletingProgId={deletingProgId}
+                  confirmedDeletingId={confirmedDeletingId}
+                />
               );
             })}
           </div>
@@ -407,6 +624,49 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Delete Confirmation Modal */}
+      {deletingProgId !== null && (
+        <div className="modal-overlay" onClick={() => setDeletingProgId(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+            <h3 style={{ fontSize: '1.25rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-again)' }}>
+              <Trash2 size={20} />
+              Delete Programme
+            </h3>
+            
+            <p style={{ fontSize: '0.92rem', color: 'var(--text-secondary)', lineHeight: '1.5', marginBottom: '24px' }}>
+              Are you sure you want to delete the learning programme <strong>{programmes?.find(p => p.id === deletingProgId)?.name}</strong>? This action only removes the group shortcut, your card decks and review progress will NOT be affected.
+            </p>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                onClick={() => setDeletingProgId(null)}
+              >
+                Cancel
+              </button>
+              <button 
+                type="button" 
+                className="btn btn-primary"
+                onClick={() => {
+                  setConfirmedDeletingId(deletingProgId);
+                  setDeletingProgId(null);
+                }}
+                disabled={deleteDelayRemaining > 0}
+                style={{ 
+                  background: deleteDelayRemaining > 0 ? 'rgba(255, 255, 255, 0.05)' : 'var(--color-again)',
+                  borderColor: deleteDelayRemaining > 0 ? 'var(--border-color)' : 'transparent',
+                  color: deleteDelayRemaining > 0 ? 'var(--text-muted)' : '#ffffff',
+                  boxShadow: deleteDelayRemaining > 0 ? 'none' : '0 0 15px var(--color-again-glow)',
+                  cursor: deleteDelayRemaining > 0 ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {deleteDelayRemaining > 0 ? `Delete (${deleteDelayRemaining}s)` : 'Delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}
