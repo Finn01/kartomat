@@ -71,8 +71,29 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   const headerRef = useRef<HTMLDivElement>(null);
   const [headerHeight, setHeaderHeight] = useState(72);
 
+  // Track viewport height numerically (in addition to the CSS dvh clamp) so we can cap the
+  // animated card height in JS — animating toward a value beyond the CSS max-height would be
+  // clipped instantly with no visible transition.
+  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
+  useEffect(() => {
+    const update = () => setViewportHeight(window.visualViewport?.height ?? window.innerHeight);
+    update();
+    window.addEventListener('resize', update);
+    window.visualViewport?.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.visualViewport?.removeEventListener('resize', update);
+    };
+  }, []);
+
   // Reference to the live card so we can freeze its height while it flicks away.
   const baseCardRef = useRef<HTMLDivElement>(null);
+
+  // Measure the card's natural content height so we can animate growth (e.g. on answer reveal)
+  // as a smooth downward extension instead of an instant layout jump.
+  const cardContentRef = useRef<HTMLDivElement>(null);
+  const [cardContentHeight, setCardContentHeight] = useState<number | null>(null);
+  const [skipHeightAnim, setSkipHeightAnim] = useState(true);
 
   // Query database in raw format (we'll process this once on mount/deck change)
   const allCards = useLiveQuery(() => db.cards.toArray());
@@ -87,6 +108,30 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     ro.observe(el);
     return () => ro.disconnect();
   }, [loading]);
+
+  // Track the live card's natural content height and mirror it onto the outer card as an
+  // animated `height`, so growth (e.g. revealing the answer) reads as a fluid downward
+  // extension rather than an instant jump. Height changes triggered by swapping to a new
+  // card are applied without animation (see skipHeightAnim).
+  useLayoutEffect(() => {
+    const el = cardContentRef.current;
+    if (!el) {
+      setCardContentHeight(null);
+      return;
+    }
+    // A new card just mounted: snap to its size instead of animating from the old card's height.
+    setSkipHeightAnim(true);
+    const update = () => setCardContentHeight(el.offsetHeight);
+    update();
+    // Re-enable the grow/shrink animation once the initial size has been applied.
+    const enableAnim = requestAnimationFrame(() => setSkipHeightAnim(false));
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(enableAnim);
+    };
+  }, [queue.length > 0 ? queue[currentIdx].card.id : null]);
 
   useEffect(() => {
     if (!allCards || !allProgress) return;
@@ -657,11 +702,21 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   const total = completedCount + queue.length;
   const progressPercent = total > 0 ? Math.round((completedCount / total) * 100) : 100;
 
-  // Size the card to fit under the sticky header so its top edge stays visible and its body scrolls internally.
+  // Size the card to fit under the sticky header; once content exceeds this, the whole card scrolls.
   const cardMaxHeight = `calc(100dvh - ${headerHeight}px - 96px - env(safe-area-inset-bottom, 0px))`;
   const cardSizing: React.CSSProperties = {
     maxHeight: cardMaxHeight,
     minHeight: `min(380px, ${cardMaxHeight})`,
+  };
+  // Numeric twin of cardMaxHeight, used to clamp the animated height target below — animating
+  // `height` toward a value beyond the CSS max-height would just be clipped instantly with no
+  // visible transition, so we cap the JS target at the same limit.
+  const cardMaxHeightPx = Math.max(200, viewportHeight - headerHeight - 96);
+  // Animate the card's own height to its measured content height so growth (e.g. revealing the
+  // answer) reads as a fluid downward extension, right up to the viewport clamp.
+  const liveCardSizing: React.CSSProperties = {
+    ...cardSizing,
+    ...(cardContentHeight != null ? { height: `${Math.min(cardContentHeight, cardMaxHeightPx)}px` } : {}),
   };
 
   return (
@@ -715,18 +770,24 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
       {/* Flashcard container (stacks the flicking card over the next one being revealed) */}
       <div className="card-wrapper">
         {currentItem && (
-          <div ref={baseCardRef} className={`flashcard-3d ${showAnswer ? 'showing-answer' : 'studying'}`} style={cardSizing}>
-            {renderCardFace(currentItem, {
-              showAnswer,
-              tfSelection,
-              clusterSelections,
-              previews: getNextReviewPreviews(currentItem.progress, customFSRSSettings),
-              setTfSelection: (value) => setTfSelection(value),
-              setClusterSelection: (idx, value) => setClusterSelections(prev => ({ ...prev, [idx]: value })),
-              onReveal: handleReveal,
-              onRate: handleRate,
-              disabled: false,
-            })}
+          <div
+            ref={baseCardRef}
+            className={`flashcard-3d ${showAnswer ? 'showing-answer' : 'studying'} ${skipHeightAnim ? 'no-height-anim' : ''}`}
+            style={liveCardSizing}
+          >
+            <div ref={cardContentRef} className="flashcard-3d-content">
+              {renderCardFace(currentItem, {
+                showAnswer,
+                tfSelection,
+                clusterSelections,
+                previews: getNextReviewPreviews(currentItem.progress, customFSRSSettings),
+                setTfSelection: (value) => setTfSelection(value),
+                setClusterSelection: (idx, value) => setClusterSelections(prev => ({ ...prev, [idx]: value })),
+                onReveal: handleReveal,
+                onRate: handleRate,
+                disabled: false,
+              })}
+            </div>
           </div>
         )}
 
@@ -737,17 +798,19 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
               className="flashcard-3d showing-answer card-flicking"
               style={{ ...cardSizing, height: flicking.height != null ? `${flicking.height}px` : undefined }}
             >
-              {renderCardFace(flicking.item, {
-                showAnswer: true,
-                tfSelection: flicking.tfSelection,
-                clusterSelections: flicking.clusterSelections,
-                previews: flicking.previews,
-                setTfSelection: () => {},
-                setClusterSelection: () => {},
-                onReveal: () => {},
-                onRate: () => {},
-                disabled: true,
-              })}
+              <div className="flashcard-3d-content">
+                {renderCardFace(flicking.item, {
+                  showAnswer: true,
+                  tfSelection: flicking.tfSelection,
+                  clusterSelections: flicking.clusterSelections,
+                  previews: flicking.previews,
+                  setTfSelection: () => {},
+                  setClusterSelection: () => {},
+                  onReveal: () => {},
+                  onRate: () => {},
+                  disabled: true,
+                })}
+              </div>
             </div>
           </div>
         )}

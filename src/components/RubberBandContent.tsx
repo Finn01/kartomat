@@ -2,9 +2,10 @@ import React, { useRef, useState, useEffect } from 'react';
 
 interface RubberBandContentProps {
   children: React.ReactNode;
+  disabled?: boolean;
 }
 
-export const RubberBandContent: React.FC<RubberBandContentProps> = ({ children }) => {
+export const RubberBandContent: React.FC<RubberBandContentProps> = ({ children, disabled = false }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const [translateY, setTranslateY] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -15,7 +16,7 @@ export const RubberBandContent: React.FC<RubberBandContentProps> = ({ children }
 
   useEffect(() => {
     const el = contentRef.current;
-    if (!el) return;
+    if (!el || disabled) return;
 
     const handleTouchStart = (e: TouchEvent) => {
       startYRef.current = e.touches[0].clientY;
@@ -94,7 +95,16 @@ export const RubberBandContent: React.FC<RubberBandContentProps> = ({ children }
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);
     };
-  }, []);
+  }, [disabled]);
+
+  // Snap back immediately if disabled mid-gesture (e.g. a study session opens while pulling).
+  useEffect(() => {
+    if (disabled) {
+      touchStateRef.current = 'idle';
+      setIsTransitioning(false);
+      setTranslateY(0);
+    }
+  }, [disabled]);
 
   return (
     <div 

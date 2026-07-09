@@ -210,7 +210,7 @@ function App() {
       </header>
 
       {/* Main Content Area */}
-      <RubberBandContent>
+      <RubberBandContent disabled={sessionState !== 'closed'}>
         {/* Segmented Tab Switcher */}
         <div className="tab-switcher">
           <button 

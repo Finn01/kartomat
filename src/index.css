@@ -467,18 +467,30 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid var(--border-color);
   border-radius: 28px;
   box-shadow: var(--shadow-lg);
+  min-height: 380px;
+  /* The whole card scrolls as one unit once its content exceeds the viewport-clamped max-height */
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, height 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Card swap: apply the new card's size instantly instead of animating from the old card's height */
+.flashcard-3d.no-height-anim {
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.flashcard-3d-content {
   padding: 24px;
   min-height: 380px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  /* Keep the card frame fixed while its body scrolls under the top border */
-  overflow: hidden;
-  transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 @media (min-width: 640px) {
-  .flashcard-3d {
+  .flashcard-3d-content {
     padding: 32px;
   }
 }
@@ -531,19 +543,12 @@ h1, h2, h3, h4, h5, h6 {
 /* Body / content inside card */
 .card-body {
   flex: 1;
-  /* Allow the flex item to shrink below its content so it can scroll */
-  min-height: 0;
   display: flex;
   flex-direction: column;
-  /* Center short content, but fall back to top-alignment (no clipping) when it overflows */
+  /* Center short content; the card itself (not this element) scrolls when content overflows */
   justify-content: safe center;
   margin-bottom: 24px;
   text-align: center;
-  /* Content scrolls under the fixed card border/header */
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .card-question {
@@ -765,6 +770,8 @@ h1, h2, h3, h4, h5, h6 {
   will-change: transform;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* Stop scroll chaining to the Main menu behind this fixed overlay once this reaches its scroll limit */
+  overscroll-behavior: contain;
   transform: translateY(100%);
   transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -800,10 +807,6 @@ h1, h2, h3, h4, h5, h6 {
               border-color 0.4s ease;
 }
 
-.flashcard-3d {
-  transition: min-height 0.4s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s ease, box-shadow 0.3s ease;
-}
-
 /* Study session sticky header */
 .session-sticky-header {
   position: -webkit-sticky;
@@ -830,7 +833,6 @@ h1, h2, h3, h4, h5, h6 {
 .card-flick-layer .flashcard-3d.card-flicking {
   border-style: solid;
   border-color: var(--flick-color, var(--color-good));
-  box-shadow: 0 18px 50px -12px var(--flick-color, rgba(0, 0, 0, 0.5)), var(--shadow-lg);
   transform-origin: 50% 135%;
   will-change: transform, opacity;
   animation: card-flick-off 0.5s cubic-bezier(0.4, 0.1, 0.5, 1) forwards;
@@ -843,7 +845,7 @@ h1, h2, h3, h4, h5, h6 {
     border-width: 1px;
   }
   16% {
-    transform: translate(2%, -8px) rotate(2deg);
+    transform: translate(-8%, -4px) rotate(-4deg);
     opacity: 1;
     border-width: 3px;
   }
