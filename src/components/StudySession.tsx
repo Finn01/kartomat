@@ -113,6 +113,15 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   // Calculate rating previews
   const previews = getNextReviewPreviews(progress, customFSRSSettings);
 
+  // Determine if the current card was answered incorrectly (only for interactive types)
+  const isInteractive = card.type === 'truefalse' || card.type === 'cluster';
+  let isAnsweredIncorrectly = false;
+  if (card.type === 'truefalse') {
+    isAnsweredIncorrectly = tfSelection !== card.answer;
+  } else if (card.type === 'cluster') {
+    isAnsweredIncorrectly = card.items.some((item, idx) => clusterSelections[idx] !== item.answer);
+  }
+
   const handleReveal = () => {
     setShowAnswer(true);
   };
@@ -468,6 +477,47 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
               <button className="btn btn-primary" onClick={handleReveal} style={{ width: '100%', padding: '14px' }}>
                 <Eye size={18} /> Show Answer
               </button>
+            ) : isInteractive && isAnsweredIncorrectly ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {/* Warning / Explanation Banner */}
+                <div style={{ 
+                  padding: '12px 16px', 
+                  borderRadius: '12px', 
+                  background: 'rgba(244, 63, 94, 0.08)',
+                  border: '1px solid rgba(244, 63, 94, 0.2)',
+                  fontSize: '0.88rem',
+                  lineHeight: '1.4',
+                  color: '#fda4af',
+                  textAlign: 'center',
+                  fontWeight: 500
+                }}>
+                  Your answer was incorrect. Under spaced repetition standards, this card must be reviewed again to reinforce memory.
+                </div>
+                
+                {/* Single big Again button */}
+                <button 
+                  onClick={() => handleRate(Rating.Again)}
+                  className="btn btn-primary" 
+                  style={{ 
+                    width: '100%', 
+                    padding: '14px',
+                    background: 'linear-gradient(135deg, var(--color-again), #be123c)',
+                    borderColor: 'var(--color-again)',
+                    boxShadow: '0 4px 12px var(--color-again-glow)',
+                    color: '#ffffff',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '2px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <span style={{ fontSize: '0.95rem', fontWeight: 'bold' }}>Review Again</span>
+                  <span style={{ fontSize: '0.75rem', opacity: 0.9 }}>
+                    Due: {previews[Rating.Again].interval}
+                  </span>
+                </button>
+              </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 
