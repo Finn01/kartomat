@@ -61,14 +61,22 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
         }
       }
 
-      // Shuffle due items and new items independently
+      // Sort due items in line with FSRS/SR learning standards:
+      // 1. Learning/Relearning cards (states 1 and 3) that are due should be prioritized and sorted by due date ascending (most urgent first).
+      // 2. Review cards (state 2 or others) that are due should be sorted by due date ascending (most overdue first).
+      // 3. New cards should be shown last.
+      const dueLearning = dueItems
+        .filter(item => item.progress.state === 1 || item.progress.state === 3)
+        .sort((a, b) => new Date(a.progress.due).getTime() - new Date(b.progress.due).getTime());
+
+      const dueReview = dueItems
+        .filter(item => item.progress.state !== 1 && item.progress.state !== 3)
+        .sort((a, b) => new Date(a.progress.due).getTime() - new Date(b.progress.due).getTime());
+
       const shuffle = <T,>(arr: T[]): T[] => [...arr].sort(() => Math.random() - 0.5);
-      
-      const shuffledDue = shuffle(dueItems);
-      // Limit new cards to 15 per session to avoid overwhelming the user
       const shuffledNew = shuffle(newItems).slice(0, 15);
 
-      setQueue([...shuffledDue, ...shuffledNew]);
+      setQueue([...dueLearning, ...dueReview, ...shuffledNew]);
       setLoading(false);
     };
 
@@ -136,9 +144,9 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     setClusterSelections({});
 
     // 3. Spaced repetition queue re-handling:
-    // If rated Again (Forgot) or Hard, we want to re-queue it in this session.
-    // Otherwise (Good/Easy), it is completed.
-    if (rating === Rating.Again || rating === Rating.Hard) {
+    // Only if rated Again (Forgot/Failed) do we want to re-queue it in this session.
+    // Otherwise (Hard/Good/Easy are passing grades), the card is completed and scheduled for the future.
+    if (rating === Rating.Again) {
       // Put it back in the queue. Let's insert it 3-5 cards later to avoid showing it immediately, or at the end.
       const updatedQueue = [...queue];
       // Remove current item
