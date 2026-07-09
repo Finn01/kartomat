@@ -494,9 +494,9 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
                   style={{ 
                     width: '100%', 
                     padding: '14px',
-                    background: 'linear-gradient(135deg, var(--color-again), #be123c)',
-                    borderColor: 'var(--color-again)',
-                    boxShadow: '0 4px 12px var(--color-again-glow)',
+                    background: 'linear-gradient(135deg, var(--color-easy), #1d4ed8)',
+                    borderColor: 'var(--color-easy)',
+                    boxShadow: '0 4px 12px var(--color-easy-glow)',
                     color: '#ffffff',
                     display: 'flex',
                     justifyContent: 'center',

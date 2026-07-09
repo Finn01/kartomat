@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from './db';
 import { LearnHome } from './components/LearnHome';
 import { DeckList } from './components/DeckList';
 import { StudySession } from './components/StudySession';
 import { SettingsModal } from './components/SettingsModal';
-import { Settings, Sparkles, Layers, GraduationCap } from 'lucide-react';
+import { Settings, Sparkles, Layers, GraduationCap, Check } from 'lucide-react';
 import { deriveFSRSSettings } from './fsrs';
 import type { FSRSSettings } from './types';
 import { useRegisterSW } from 'virtual:pwa-register/react';
@@ -16,6 +16,21 @@ function App() {
   const [sessionDeckIds, setSessionDeckIds] = useState<string[] | null>(null);
   const [customFSRSSettings, setCustomFSRSSettings] = useState<FSRSSettings | undefined>(undefined);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [isUpdatingPWA, setIsUpdatingPWA] = useState(false);
+  const [showUpdateSuccess, setShowUpdateSuccess] = useState(false);
+
+  // Check if we just installed an update
+  useEffect(() => {
+    const updated = localStorage.getItem('pwa_update_installed');
+    if (updated === 'true') {
+      localStorage.removeItem('pwa_update_installed');
+      setShowUpdateSuccess(true);
+      const timer = setTimeout(() => {
+        setShowUpdateSuccess(false);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, []);
 
   // Initialize service worker update hooks
   const {
@@ -175,7 +190,15 @@ function App() {
           </span>
           <button 
             className="btn" 
-            onClick={() => updateServiceWorker(true)}
+            disabled={isUpdatingPWA}
+            onClick={() => {
+              setIsUpdatingPWA(true);
+              localStorage.setItem('pwa_update_installed', 'true');
+              // Briefly wait for spinner animation to play before service worker reloads
+              setTimeout(() => {
+                updateServiceWorker(true);
+              }, 600);
+            }}
             style={{ 
               background: '#ffffff', 
               color: 'var(--color-primary)', 
@@ -183,11 +206,48 @@ function App() {
               fontSize: '0.85rem',
               border: 'none',
               borderRadius: '8px',
-              cursor: 'pointer'
+              cursor: isUpdatingPWA ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
             }}
           >
-            Update Now
+            {isUpdatingPWA ? (
+              <>
+                <div className="spinner" />
+                Updating...
+              </>
+            ) : (
+              'Update Now'
+            )}
           </button>
+        </div>
+      )}
+
+      {/* Floating PWA Success Banner */}
+      {showUpdateSuccess && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          left: '24px',
+          right: '24px',
+          zIndex: 2000,
+          padding: '16px 20px',
+          background: 'linear-gradient(135deg, var(--color-good), #065f46)',
+          color: '#ffffff',
+          borderRadius: '16px',
+          boxShadow: '0 8px 32px var(--color-good-glow)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          animation: 'slideUpAndPulse 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)'
+        }}>
+          <div className="checkmark-circle">
+            <Check size={18} strokeWidth={3} className="checkmark-icon" />
+          </div>
+          <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+            Kartomat has been successfully updated to the latest version!
+          </span>
         </div>
       )}
 
