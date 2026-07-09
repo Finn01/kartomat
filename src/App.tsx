@@ -251,7 +251,7 @@ function App() {
       {/* Fixed Overlay Study Session */}
       {sessionState !== 'closed' && (
         <div className={`study-session-overlay ${sessionState}`}>
-          <div className="app-container" style={{ minHeight: 'auto', paddingTop: '12px' }}>
+          <div className="app-container" style={{ minHeight: 'auto', paddingTop: '12px', paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))' }}>
             <StudySession 
               deckIds={sessionDeckIds} 
               customFSRSSettings={customFSRSSettings}
