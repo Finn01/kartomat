@@ -4,7 +4,7 @@ import { db } from '../db';
 import type { Flashcard, CardProgress, FSRSSettings } from '../types';
 import { Rating } from 'ts-fsrs';
 import { reviewCard, createNewProgress, getNextReviewPreviews } from '../fsrs';
-import { X, Check, Eye, CheckCircle2 } from 'lucide-react';
+import { X, Check, Eye, CheckCircle2, Clock } from 'lucide-react';
 
 interface StudySessionProps {
   deckIds: string[] | null; // null means global study (all decks)
@@ -59,6 +59,13 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   const [showAnswer, setShowAnswer] = useState(false);
   const [completedCount, setCompletedCount] = useState(0);
   const [sessionReviewedCount, setSessionReviewedCount] = useState(0);
+  // When true, review cards that aren't due yet are pulled into the queue too (opt-in "study
+  // ahead" for when nothing is currently scheduled). Never affects new-card selection, which is
+  // already included regardless of due dates.
+  const [studyAhead, setStudyAhead] = useState(false);
+  // Whether any not-yet-due review cards exist at all, so we know whether "Study ahead" has
+  // anything to offer (kept separate from `queue` so it survives the due-only filtering).
+  const [hasUpcomingCards, setHasUpcomingCards] = useState(false);
 
   // Card type specific states
   const [tfSelection, setTfSelection] = useState<boolean | null>(null);
@@ -66,6 +73,9 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
 
   // Completion animation state (the card currently being flicked off the deck)
   const [flicking, setFlicking] = useState<FlickSnapshot | null>(null);
+  // Synchronous re-entrancy guard for handleRate: `flicking` state doesn't commit until the
+  // next render, so a rapid double-click/double-tap could otherwise slip past that check.
+  const ratingInFlightRef = useRef(false);
 
   // Measure the sticky header so the card can be sized to fit the viewport beneath it.
   const headerRef = useRef<HTMLDivElement>(null);
@@ -144,6 +154,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
 
       const now = new Date();
       const dueItems: SessionQueueItem[] = [];
+      const upcomingItems: SessionQueueItem[] = []; // not yet due — only studied via "Study ahead"
       const newItems: SessionQueueItem[] = [];
 
       for (const card of filteredCards) {
@@ -157,9 +168,13 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
           const isDue = new Date(prog.due) <= now;
           if (isDue) {
             dueItems.push({ card, progress: prog });
+          } else {
+            upcomingItems.push({ card, progress: prog });
           }
         }
       }
+
+      setHasUpcomingCards(upcomingItems.length > 0);
 
       // Sort due items in line with FSRS/SR learning standards:
       // 1. Learning/Relearning cards (states 1 and 3) that are due should be prioritized and sorted by due date ascending (most urgent first).
@@ -176,12 +191,18 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
       const shuffle = <T,>(arr: T[]): T[] => [...arr].sort(() => Math.random() - 0.5);
       const shuffledNew = shuffle(newItems).slice(0, 15);
 
-      setQueue([...dueLearning, ...dueReview, ...shuffledNew]);
+      // "Study ahead": pull in not-yet-due review cards too, soonest-due first (least early —
+      // and therefore least likely to distort FSRS's stability estimate — reviewed first).
+      const aheadReview = studyAhead
+        ? [...upcomingItems].sort((a, b) => new Date(a.progress.due).getTime() - new Date(b.progress.due).getTime())
+        : [];
+
+      setQueue([...dueLearning, ...dueReview, ...shuffledNew, ...aheadReview]);
       setLoading(false);
     };
 
     prepareQueue();
-  }, [allCards, allProgress, deckIds]);
+  }, [allCards, allProgress, deckIds, studyAhead]);
 
   if (loading) {
     return (
@@ -197,6 +218,36 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
 
   // Handle empty queue — but let a final flick finish playing before showing the summary.
   if (queue.length === 0 && !flicking) {
+    // Nothing was ever reviewed this session: either the deck had nothing due to begin with,
+    // or "Study ahead" is on but everything upcoming has now been reviewed too.
+    if (sessionReviewedCount === 0) {
+      return (
+        <div className="glass-panel" style={{ padding: '48px 24px', textAlign: 'center', margin: '40px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
+          <div style={{ padding: '16px', borderRadius: '50%', background: 'rgba(59, 130, 246, 0.1)', color: 'var(--color-secondary)' }}>
+            <Clock size={44} />
+          </div>
+          <div>
+            <h2 style={{ fontSize: '1.4rem', marginBottom: '8px' }}>Nothing Scheduled</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', maxWidth: '400px', margin: '0 auto', lineHeight: '1.4' }}>
+              {studyAhead
+                ? "You've reviewed everything available, including cards not yet due."
+                : 'No flashcards are due for review right now. Check back later, or study ahead if you want to get a head start.'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            {!studyAhead && hasUpcomingCards && (
+              <button className="btn" onClick={() => setStudyAhead(true)}>
+                Study Ahead
+              </button>
+            )}
+            <button className="btn btn-primary" onClick={onClose}>
+              Return to Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="glass-panel" style={{ padding: '48px 24px', textAlign: 'center', margin: '40px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
         <div style={{ padding: '16px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--color-good)' }}>
@@ -222,12 +273,19 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   };
 
   const handleRate = async (rating: Rating) => {
-    // Ignore new ratings while a flick animation is in flight.
-    if (flicking) return;
+    // Ignore new ratings while a flick animation is in flight. Checked synchronously via a ref
+    // (rather than relying solely on `flicking` state) so a rapid double-click/double-tap can't
+    // slip through before the state update from the first call has committed.
+    if (flicking || ratingInFlightRef.current) return;
+    ratingInFlightRef.current = true;
 
     const item = queue[currentIdx];
-    if (!item) return;
+    if (!item) {
+      ratingInFlightRef.current = false;
+      return;
+    }
     const { card, progress } = item;
+    const cardId = card.id;
 
     // Determine if an interactive card was answered incorrectly (drives the red flick border).
     const isInteractive = card.type === 'truefalse' || card.type === 'cluster';
@@ -264,30 +322,41 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     // Otherwise (Hard/Good/Easy are passing grades), the card is completed and scheduled for the future.
     if (rating === Rating.Again) {
       // Put it back in the queue, a few cards later, to avoid showing it immediately.
-      const updatedQueue = [...queue];
-      updatedQueue.splice(currentIdx, 1);
+      setQueue(prevQueue => {
+        const idx = prevQueue.findIndex(q => q.card.id === cardId);
+        if (idx === -1) return prevQueue; // already removed by a duplicate/racing call
 
-      const newQueueItem: SessionQueueItem = {
-        card,
-        progress: updatedProgress
-      };
+        const updatedQueue = [...prevQueue];
+        updatedQueue.splice(idx, 1);
 
-      const insertIdx = Math.min(updatedQueue.length, 3);
-      updatedQueue.splice(insertIdx, 0, newQueueItem);
+        const newQueueItem: SessionQueueItem = {
+          card,
+          progress: updatedProgress
+        };
 
-      setQueue(updatedQueue);
+        const insertIdx = Math.min(updatedQueue.length, 3);
+        updatedQueue.splice(insertIdx, 0, newQueueItem);
+
+        return updatedQueue;
+      });
     } else {
       // Card is successfully scheduled in the future!
       setCompletedCount(prev => prev + 1);
+      setQueue(prevQueue => {
+        const idx = prevQueue.findIndex(q => q.card.id === cardId);
+        if (idx === -1) return prevQueue; // already removed by a duplicate/racing call
 
-      const updatedQueue = [...queue];
-      updatedQueue.splice(currentIdx, 1);
-
-      setQueue(updatedQueue);
+        const updatedQueue = [...prevQueue];
+        updatedQueue.splice(idx, 1);
+        return updatedQueue;
+      });
     }
 
     // 5. Clear the flick snapshot once the animation has played.
-    setTimeout(() => setFlicking(null), FLICK_DURATION_MS);
+    setTimeout(() => {
+      setFlicking(null);
+      ratingInFlightRef.current = false;
+    }, FLICK_DURATION_MS);
   };
 
   // Helper to parse and render Cloze front/back
@@ -744,6 +813,14 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
             <X size={16} /> Exit Session
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {studyAhead && (
+              <span
+                title="Reviewing cards ahead of their scheduled date can make FSRS's difficulty estimates less accurate."
+                style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.78rem', color: 'var(--color-secondary)', fontWeight: 600, background: 'rgba(6, 182, 212, 0.1)', border: '1px solid rgba(6, 182, 212, 0.3)', borderRadius: '99px', padding: '2px 10px' }}
+              >
+                <Clock size={12} /> Studying Ahead
+              </span>
+            )}
             <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>
               Remaining: {queue.length}
             </span>
@@ -785,7 +862,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
                 setClusterSelection: (idx, value) => setClusterSelections(prev => ({ ...prev, [idx]: value })),
                 onReveal: handleReveal,
                 onRate: handleRate,
-                disabled: false,
+                disabled: flicking !== null,
               })}
             </div>
           </div>
