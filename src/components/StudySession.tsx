@@ -487,21 +487,6 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
               </button>
             ) : isInteractive && isAnsweredIncorrectly ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {/* Warning / Explanation Banner */}
-                <div style={{ 
-                  padding: '12px 16px', 
-                  borderRadius: '12px', 
-                  background: 'rgba(244, 63, 94, 0.08)',
-                  border: '1px solid rgba(244, 63, 94, 0.2)',
-                  fontSize: '0.88rem',
-                  lineHeight: '1.4',
-                  color: '#fda4af',
-                  textAlign: 'center',
-                  fontWeight: 500
-                }}>
-                  Your answer was incorrect. Under spaced repetition standards, this card must be reviewed again to reinforce memory.
-                </div>
-                
                 {/* Single big Again button */}
                 <button 
                   onClick={() => handleRate(Rating.Again)}
@@ -514,16 +499,12 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
                     boxShadow: '0 4px 12px var(--color-again-glow)',
                     color: '#ffffff',
                     display: 'flex',
-                    flexDirection: 'column',
+                    justifyContent: 'center',
                     alignItems: 'center',
-                    gap: '2px',
                     cursor: 'pointer'
                   }}
                 >
-                  <span style={{ fontSize: '0.95rem', fontWeight: 'bold' }}>Review Again</span>
-                  <span style={{ fontSize: '0.75rem', opacity: 0.9 }}>
-                    Due: {previews[Rating.Again].interval}
-                  </span>
+                  <span style={{ fontSize: '0.95rem', fontWeight: 'bold' }}>Next Card</span>
                 </button>
               </div>
             ) : (
