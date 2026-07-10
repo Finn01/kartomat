@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Flashcard, CardProgress, FSRSSettings } from '../types';
-import { Rating } from 'ts-fsrs';
+import { Rating, State } from 'ts-fsrs';
 import { reviewCard, createNewProgress, getNextReviewPreviews } from '../fsrs';
 import { X, Check, Eye, CheckCircle2, Clock } from 'lucide-react';
 
@@ -109,6 +109,14 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   const allCards = useLiveQuery(() => db.cards.toArray());
   const allProgress = useLiveQuery(() => db.progress.toArray());
 
+  // The queue is built exactly once per (deck selection × studyAhead) — captured here so that
+  // subsequent `allProgress` changes (fired by every `reviewCard()` write) do NOT rebuild it out
+  // from under the running session. Once built, the queue is owned solely by `handleRate`, which
+  // splices completed cards out and re-queues "Again" cards. Rebuilding on every DB write is what
+  // used to desync the Remaining/Completed counters and re-inject just-completed learning cards
+  // (a "Good"-rated new card is due again in ~10 min, i.e. `due <= now`, so it kept coming back).
+  const queueBuiltRef = useRef(false);
+
   useLayoutEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -143,8 +151,18 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     };
   }, [queue.length > 0 ? queue[currentIdx].card.id : null]);
 
+  // Rebuild the queue only when the *inputs that define the session* change (deck selection or
+  // the study-ahead toggle) — not on every progress write. This guard is reset in that effect's
+  // dependency, so toggling "Study ahead" mid-session re-derives the queue as intended.
+  useEffect(() => {
+    queueBuiltRef.current = false;
+  }, [deckIds, studyAhead]);
+
   useEffect(() => {
     if (!allCards || !allProgress) return;
+    // Already built for this deck/studyAhead combination — leave the live queue alone so that
+    // `handleRate` remains the single owner of queue mutations.
+    if (queueBuiltRef.current) return;
 
     const prepareQueue = async () => {
       // 1. Filter cards by selected decks
@@ -197,6 +215,10 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
         ? [...upcomingItems].sort((a, b) => new Date(a.progress.due).getTime() - new Date(b.progress.due).getTime())
         : [];
 
+      // Arm the guard so that subsequent `allProgress` writes (from every `reviewCard()`) don't
+      // rebuild the queue — from here on `handleRate` is its sole owner. Set before the state
+      // updates below so the effect can't re-enter and rebuild in the meantime.
+      queueBuiltRef.current = true;
       setQueue([...dueLearning, ...dueReview, ...shuffledNew, ...aheadReview]);
       setLoading(false);
     };
@@ -256,7 +278,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
         <div>
           <h2 style={{ fontSize: '1.4rem', marginBottom: '8px' }}>Session Complete!</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', maxWidth: '400px', margin: '0 auto', lineHeight: '1.4' }}>
-            Excellent job! You reviewed {sessionReviewedCount} cards in this session. All cards have been scheduled for their next intervals.
+            Excellent job! You completed {completedCount} {completedCount === 1 ? 'card' : 'cards'} in this session{sessionReviewedCount !== completedCount ? ` across ${sessionReviewedCount} reviews` : ''}. All cards have been scheduled for their next intervals.
           </p>
         </div>
         <button className="btn btn-primary" onClick={onClose}>
@@ -317,11 +339,21 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     setClusterSelections({});
     setShowAnswer(false);
 
-    // 4. Spaced repetition queue re-handling:
-    // Only if rated Again (Forgot/Failed) do we want to re-queue it in this session.
-    // Otherwise (Hard/Good/Easy are passing grades), the card is completed and scheduled for the future.
-    if (rating === Rating.Again) {
-      // Put it back in the queue, a few cards later, to avoid showing it immediately.
+    // 4. Spaced repetition queue re-handling — Anki-style learning steps.
+    // A card only *completes* (leaves this session) once FSRS moves it into the Review state,
+    // i.e. it has graduated out of its short-term learning/relearning steps and is scheduled a
+    // real interval away. While it is still Learning/Relearning it stays in the session and is
+    // re-drilled a few cards later. This covers:
+    //   - Again on anything → Learning/Relearning → re-drill
+    //   - Good/Hard on a still-learning (e.g. new) card → next learning step (~10m) → re-drill
+    //   - Easy on a new card, or any passing grade on a matured Review card → Review → complete
+    // `completedCount` therefore counts genuine graduations, which keeps it in lockstep with the
+    // queue: a re-drilled card stays counted in `queue.length` until it graduates, at which point
+    // it moves to `completedCount` — so Remaining + Completed never double-count or drift.
+    const hasGraduated = updatedProgress.state === State.Review;
+    if (!hasGraduated) {
+      // Still in a learning step — put it back in the queue, a few cards later, so it isn't shown
+      // again immediately.
       setQueue(prevQueue => {
         const idx = prevQueue.findIndex(q => q.card.id === cardId);
         if (idx === -1) return prevQueue; // already removed by a duplicate/racing call
@@ -340,7 +372,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
         return updatedQueue;
       });
     } else {
-      // Card is successfully scheduled in the future!
+      // Graduated to Review — done for this session and scheduled a real interval into the future.
       setCompletedCount(prev => prev + 1);
       setQueue(prevQueue => {
         const idx = prevQueue.findIndex(q => q.card.id === cardId);
