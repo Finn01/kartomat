@@ -10,6 +10,7 @@ import { deriveFSRSSettings } from './fsrs';
 import type { FSRSSettings } from './types';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { RubberBandContent } from './components/RubberBandContent';
+import { useBodyScrollLock } from './hooks/useBodyScrollLock';
 
 function App() {
   const [activeTab, setActiveTab] = useState<'learn' | 'decks'>('learn');
@@ -65,6 +66,7 @@ function App() {
 
   // Study Session Entry/Exit State
   const [sessionState, setSessionState] = useState<'closed' | 'entering' | 'active' | 'exiting'>('closed');
+  useBodyScrollLock(sessionState !== 'closed');
 
   useEffect(() => {
     const el = sliderContainerRef.current;

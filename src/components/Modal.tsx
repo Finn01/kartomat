@@ -1,5 +1,6 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface ModalProps {
   onClose: () => void;
@@ -12,6 +13,8 @@ interface ModalProps {
 // nested inside a `transform`-ed ancestor (e.g. the tab swipe track) would
 // center itself relative to that ancestor instead of the screen.
 export const Modal: React.FC<ModalProps> = ({ onClose, children, contentStyle }) => {
+  useBodyScrollLock(true);
+
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()} style={contentStyle}>

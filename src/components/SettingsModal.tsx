@@ -3,6 +3,7 @@ import { getFSRSSettings, saveFSRSSettings } from '../fsrs';
 import { exportBackupJson, restoreBackupJson } from '../db';
 import { X, Download, Upload, Sliders, Database, Info, RefreshCw } from 'lucide-react';
 import type { FSRSSettings } from '../types';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface SettingsModalProps {
   needRefresh: boolean;
@@ -12,6 +13,8 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ needRefresh, updateServiceWorker, onClose, onDatabaseReset }) => {
+  useBodyScrollLock(true);
+
   const [settings, setSettings] = useState<FSRSSettings>({ request_retention: 0.90, maximum_interval: 36500 });
   const [importStatus, setImportStatus] = useState<{ type: 'idle' | 'success' | 'error'; message: string }>({ type: 'idle', message: '' });
   const [checkingUpdates, setCheckingUpdates] = useState(false);
