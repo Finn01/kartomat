@@ -835,25 +835,56 @@ h1, h2, h3, h4, h5, h6 {
   border-style: solid;
   border-color: var(--flick-color, var(--color-good));
   transform-origin: 50% 135%;
-  will-change: transform, opacity;
-  animation: card-flick-off 0.5s cubic-bezier(0.4, 0.1, 0.5, 1) forwards;
+  will-change: transform, opacity, border-width;
+  /* Two animations on separate timelines: the border thickens once, up front (a layout-affecting
+     change, paid for before motion starts), while transform/opacity run the whole flick on their
+     own compositor-only animation — so the move itself never triggers layout/paint per frame. */
+  animation:
+    card-flick-border 0.08s linear forwards,
+    card-flick-off 0.5s cubic-bezier(0.4, 0.1, 0.5, 1) forwards;
+}
+
+.card-flick-layer .flashcard-3d.card-flicking-right {
+  transform-origin: 50% 135%;
+  animation-name: card-flick-border, card-flick-off-right;
+}
+
+@keyframes card-flick-border {
+  0% {
+    border-width: 1px;
+  }
+  100% {
+    border-width: 3px;
+  }
 }
 
 @keyframes card-flick-off {
   0% {
     transform: translate(0, 0) rotate(0deg);
     opacity: 1;
-    border-width: 1px;
   }
   16% {
     transform: translate(-8%, -4px) rotate(-4deg);
     opacity: 1;
-    border-width: 3px;
   }
   100% {
     transform: translate(-140%, 44px) rotate(-17deg);
     opacity: 0;
-    border-width: 3px;
+  }
+}
+
+@keyframes card-flick-off-right {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+    opacity: 1;
+  }
+  16% {
+    transform: translate(8%, -4px) rotate(4deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(140%, 44px) rotate(17deg);
+    opacity: 0;
   }
 }
 

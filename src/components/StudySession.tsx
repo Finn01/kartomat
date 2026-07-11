@@ -27,6 +27,7 @@ interface FlickSnapshot {
   previews: RatingPreviews;
   color: string;
   height: number | null;
+  graduated: boolean;
 }
 
 // Options controlling how a single card face is rendered (shared by the live card and the flick overlay).
@@ -319,7 +320,16 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     }
     const flickIncorrect = isInteractive && incorrect;
 
-    // 1. Snapshot the outgoing card (including its current pixel height) so it keeps rendering
+    // 1. Commit rating to IndexedDB
+    const updatedProgress = await reviewCard(progress, rating, customFSRSSettings);
+    setSessionReviewedCount(prev => prev + 1);
+
+    // A card only *completes* (leaves this session) once FSRS moves it into the Review state —
+    // see the longer explanation below. Computed here (before the queue re-handling) so the
+    // flick snapshot can flick graduated cards right and re-drilled cards left.
+    const hasGraduated = updatedProgress.state === State.Review;
+
+    // 2. Snapshot the outgoing card (including its current pixel height) so it keeps rendering
     //    at a stable size as it flicks away, independent of the next card revealed beneath it.
     setFlicking({
       item,
@@ -328,11 +338,8 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
       previews: getNextReviewPreviews(progress, customFSRSSettings),
       color: flickColor(rating, flickIncorrect),
       height: baseCardRef.current?.offsetHeight ?? null,
+      graduated: hasGraduated,
     });
-
-    // 2. Commit rating to IndexedDB
-    const updatedProgress = await reviewCard(progress, rating, customFSRSSettings);
-    setSessionReviewedCount(prev => prev + 1);
 
     // 3. Reset interactive/reveal state for the next card (revealed beneath the flicking card)
     setTfSelection(null);
@@ -350,7 +357,6 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     // `completedCount` therefore counts genuine graduations, which keeps it in lockstep with the
     // queue: a re-drilled card stays counted in `queue.length` until it graduates, at which point
     // it moves to `completedCount` — so Remaining + Completed never double-count or drift.
-    const hasGraduated = updatedProgress.state === State.Review;
     if (!hasGraduated) {
       // Still in a learning step — put it back in the queue, a few cards later, so it isn't shown
       // again immediately.
@@ -904,7 +910,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
         {flicking && (
           <div className="card-flick-layer" style={{ ['--flick-color' as string]: flicking.color } as React.CSSProperties}>
             <div
-              className="flashcard-3d showing-answer card-flicking"
+              className={`flashcard-3d showing-answer card-flicking${flicking.graduated ? ' card-flicking-right' : ''}`}
               style={{ ...cardSizing, height: flicking.height != null ? `${flicking.height}px` : undefined }}
             >
               <div className="flashcard-3d-content">
