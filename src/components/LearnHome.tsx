@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { Play, Plus, Trash2, Calendar, Layers } from 'lucide-react';
+import { Play, Plus, Trash2, Calendar, Layers, Pencil } from 'lucide-react';
 import type { LearningProgramme } from '../types';
 import { Modal } from './Modal';
 
@@ -11,6 +11,7 @@ interface ProgrammeItemProps {
   onStartSession: (deckIds: string[] | null, programmeId?: string) => void;
   onDelete: (id: string) => void;
   onDeleteComplete: (id: string) => void;
+  onEdit: (id: string) => void;
   progStats: {
     due: number;
     newCards: number;
@@ -21,12 +22,13 @@ interface ProgrammeItemProps {
   confirmedDeletingId: string | null;
 }
 
-const ProgrammeItem: React.FC<ProgrammeItemProps> = ({ 
-  prog, 
-  decks, 
-  onStartSession, 
-  onDelete, 
+const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
+  prog,
+  decks,
+  onStartSession,
+  onDelete,
   onDeleteComplete,
+  onEdit,
   progStats,
   deletingProgId,
   confirmedDeletingId
@@ -127,10 +129,8 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
       }
 
       if (isSwipingRef.current) {
-        // Only allow swiping to the left (negative translation)
-        const newOffset = diffX < 0 ? diffX : 0;
-        offsetXRef.current = newOffset;
-        setOffsetX(newOffset);
+        offsetXRef.current = diffX;
+        setOffsetX(diffX);
         return true;
       }
       return false;
@@ -141,9 +141,14 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
       if (isSwipingRef.current) {
         isSwipingRef.current = false;
         wasDraggedRef.current = true;
-        const threshold = -100;
-        if (offsetXRef.current < threshold) {
+        const deleteThreshold = -100;
+        const editThreshold = 100;
+        if (offsetXRef.current < deleteThreshold) {
           onDelete(prog.id);
+        } else if (offsetXRef.current > editThreshold) {
+          onEdit(prog.id);
+          setOffsetX(0);
+          offsetXRef.current = 0;
         } else {
           setOffsetX(0);
           offsetXRef.current = 0;
@@ -221,7 +226,7 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [onDelete, prog.id]);
+  }, [onDelete, onEdit, prog.id]);
 
   return (
     <div 
@@ -241,35 +246,62 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
         transition: 'max-height 0.3s ease, opacity 0.3s ease, margin 0.3s ease',
       }}
     >
-      {/* Background delete area */}
-      <div
-        onClick={() => onDelete(prog.id)}
-        style={{
-          position: 'absolute',
-          // Inset 1px from the outer wrapper's own overflow:hidden/clipPath
-          // bounds. Firefox's compositor doesn't always clip a translated,
-          // separately-layered child (this sits behind the translateX'd
-          // foreground card) flush with an ancestor's rounded overflow
-          // clip — it can leave a 1px sliver of this div's own color
-          // showing right at the boundary. Pulling the edge in by 1px means
-          // that sliver, if it appears, is empty space instead of red.
-          top: 1,
-          left: 1,
-          right: 1,
-          bottom: 1,
-          background: 'var(--color-again)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          paddingRight: '24px',
-          color: '#ffffff',
-          borderRadius: '19px',
-          cursor: 'pointer',
-          zIndex: 1,
-        }}
-      >
-        <Trash2 size={20} />
-      </div>
+      {/* Background delete area (revealed on left-swipe) */}
+      {offsetX < 0 && (
+        <div
+          onClick={() => onDelete(prog.id)}
+          style={{
+            position: 'absolute',
+            // Inset 1px from the outer wrapper's own overflow:hidden/clipPath
+            // bounds. Firefox's compositor doesn't always clip a translated,
+            // separately-layered child (this sits behind the translateX'd
+            // foreground card) flush with an ancestor's rounded overflow
+            // clip — it can leave a 1px sliver of this div's own color
+            // showing right at the boundary. Pulling the edge in by 1px means
+            // that sliver, if it appears, is empty space instead of red.
+            top: 1,
+            left: 1,
+            right: 1,
+            bottom: 1,
+            background: 'var(--color-again)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            paddingRight: '24px',
+            color: '#ffffff',
+            borderRadius: '19px',
+            cursor: 'pointer',
+            zIndex: 1,
+          }}
+        >
+          <Trash2 size={20} />
+        </div>
+      )}
+
+      {/* Background edit area (revealed on right-swipe) */}
+      {offsetX > 0 && (
+        <div
+          onClick={() => onEdit(prog.id)}
+          style={{
+            position: 'absolute',
+            top: 1,
+            left: 1,
+            right: 1,
+            bottom: 1,
+            background: 'var(--color-primary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-start',
+            paddingLeft: '24px',
+            color: '#ffffff',
+            borderRadius: '19px',
+            cursor: 'pointer',
+            zIndex: 1,
+          }}
+        >
+          <Pencil size={20} />
+        </div>
+      )}
 
       {/* Foreground card */}
       <div
@@ -311,7 +343,16 @@ const ProgrammeItem: React.FC<ProgrammeItemProps> = ({
           <div ref={textColRef} style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0, alignSelf: 'flex-start' }}>
             <h4 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{prog.name}</h4>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              Decks: {prog.deckIds.map(id => decks?.find(d => d.id === id)?.titel || id).join(', ')}
+              {(() => {
+                const names = prog.deckIds.map(id => decks?.find(d => d.id === id)?.titel || id);
+                const joined = `Decks: ${names.join(', ')}`;
+                // A single line wrap is fine, but once the full name list
+                // would take up more room than that, fall back to a count
+                // so the card's height stays predictable.
+                return joined.length > 60
+                  ? `${prog.deckIds.length} deck${prog.deckIds.length === 1 ? '' : 's'} selected`
+                  : joined;
+              })()}
             </p>
             <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
               <span className="pill pill-total" style={{ fontSize: '0.7rem' }}>{progStats.total} Cards</span>
@@ -358,6 +399,7 @@ interface LearnHomeProps {
 
 export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingProgId, setEditingProgId] = useState<string | null>(null);
   const [newProgName, setNewProgName] = useState('');
   const [selectedDecks, setSelectedDecks] = useState<string[]>([]);
   const [targetRetention, setTargetRetention] = useState(0.90);
@@ -455,29 +497,62 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
     return { due, newCards, learning, total: filteredCards.length };
   };
 
-  const handleCreateProgramme = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProgName.trim() || selectedDecks.length === 0) return;
-
-    const newProg: LearningProgramme = {
-      id: 'prog_' + Math.random().toString(36).substr(2, 9),
-      name: newProgName.trim(),
-      deckIds: selectedDecks,
-      settings: {
-        target_retention: targetRetention,
-        has_deadline: hasDeadline,
-        deadline_date: hasDeadline && deadlineDate ? deadlineDate : undefined
-      },
-      createdAt: Date.now()
-    };
-
-    await db.programmes.add(newProg);
+  const resetProgrammeForm = () => {
     setNewProgName('');
     setSelectedDecks([]);
     setTargetRetention(0.90);
     setHasDeadline(false);
     setDeadlineDate('');
+  };
+
+  const handleCreateProgramme = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProgName.trim() || selectedDecks.length === 0) return;
+
+    const settings = {
+      target_retention: targetRetention,
+      has_deadline: hasDeadline,
+      deadline_date: hasDeadline && deadlineDate ? deadlineDate : undefined
+    };
+
+    if (editingProgId) {
+      await db.programmes.update(editingProgId, {
+        name: newProgName.trim(),
+        deckIds: selectedDecks,
+        settings
+      });
+      setEditingProgId(null);
+    } else {
+      const newProg: LearningProgramme = {
+        id: 'prog_' + Math.random().toString(36).substr(2, 9),
+        name: newProgName.trim(),
+        deckIds: selectedDecks,
+        settings,
+        createdAt: Date.now()
+      };
+      await db.programmes.add(newProg);
+    }
+
+    resetProgrammeForm();
     setShowCreateModal(false);
+  };
+
+  const handleEditRequest = (id: string) => {
+    const prog = programmes?.find(p => p.id === id);
+    if (!prog) return;
+    setNewProgName(prog.name);
+    setSelectedDecks(prog.deckIds);
+    setTargetRetention(prog.settings?.target_retention ?? 0.90);
+    setHasDeadline(prog.settings?.has_deadline ?? false);
+    setDeadlineDate(prog.settings?.deadline_date ?? '');
+    setEditingProgId(id);
+    setShowCreateModal(true);
+  };
+
+  const closeProgrammeModal = () => {
+    setShowCreateModal(false);
+    setEditingProgId(null);
+    resetProgrammeForm();
   };
 
   const toggleDeckSelection = (deckId: string) => {
@@ -587,9 +662,9 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
             Learning Programmes
           </h3>
           
-          <button 
-            className="btn btn-secondary" 
-            onClick={() => setShowCreateModal(true)}
+          <button
+            className="btn btn-secondary"
+            onClick={() => { setEditingProgId(null); resetProgrammeForm(); setShowCreateModal(true); }}
             style={{ padding: '8px 12px', fontSize: '0.85rem' }}
             disabled={!decks || decks.length === 0}
           >
@@ -608,13 +683,14 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
             {programmes.map(prog => {
               const progStats = getDeckSetStats(prog.deckIds);
               return (
-                <ProgrammeItem 
+                <ProgrammeItem
                   key={prog.id}
                   prog={prog}
                   decks={decks}
                   onStartSession={onStartSession}
                   onDelete={handleDeleteRequest}
                   onDeleteComplete={handleDeleteComplete}
+                  onEdit={handleEditRequest}
                   progStats={progStats}
                   deletingProgId={deletingProgId}
                   confirmedDeletingId={confirmedDeletingId}
@@ -625,12 +701,12 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
         )}
       </div>
 
-      {/* Create Programme Modal */}
+      {/* Create/Edit Programme Modal */}
       {showCreateModal && (
-        <Modal onClose={() => setShowCreateModal(false)}>
+        <Modal onClose={closeProgrammeModal}>
             <h3 style={{ fontSize: '1.25rem', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Layers size={20} style={{ color: 'var(--color-primary)' }} />
-              Create Learning Programme
+              {editingProgId ? <Pencil size={20} style={{ color: 'var(--color-primary)' }} /> : <Layers size={20} style={{ color: 'var(--color-primary)' }} />}
+              {editingProgId ? 'Edit Learning Programme' : 'Create Learning Programme'}
             </h3>
             
             <form onSubmit={handleCreateProgramme}>
@@ -733,19 +809,19 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-                <button 
-                  type="button" 
-                  className="btn btn-secondary" 
-                  onClick={() => setShowCreateModal(false)}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={closeProgrammeModal}
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   className="btn btn-primary"
                   disabled={!newProgName.trim() || selectedDecks.length === 0}
                 >
-                  Create
+                  {editingProgId ? 'Save Changes' : 'Create'}
                 </button>
               </div>
             </form>
