@@ -816,6 +816,84 @@ h1, h2, h3, h4, h5, h6 {
   z-index: 20;
 }
 
+/* Persistent study-session control bar (rating buttons + Back/Forward). Fixed to the viewport
+   bottom, centred to the app's max width, and layered above the card so the two never overlap. */
+.session-control-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 800px;
+  box-sizing: border-box;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px calc(16px + env(safe-area-inset-right, 0px))
+           calc(10px + env(safe-area-inset-bottom, 0px))
+           calc(16px + env(safe-area-inset-left, 0px));
+  background: rgba(8, 9, 13, 0.92);
+  backdrop-filter: blur(var(--backdrop-blur));
+  -webkit-backdrop-filter: blur(var(--backdrop-blur));
+  border-top: 1px solid var(--border-color);
+}
+
+.session-rating-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0 0 2px;
+  min-height: 1em;
+}
+
+.session-rating-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+/* Selected (recorded) rating pops with a glow so the locked choice reads at a glance. */
+.session-rating-btn.is-selected {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.session-rating-btn:disabled {
+  cursor: default;
+}
+
+.session-nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-nav-btn {
+  flex: 1;
+  padding: 10px 12px;
+}
+
+.session-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The Back slot while an undo is offered — accented so it reads as an action, not plain nav. */
+.session-undo-btn {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: var(--color-hard);
+  color: var(--color-hard);
+}
+
+.session-nav-pos {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 56px;
+  text-align: center;
+}
+
 /* Card completion flick-off animation (rated card is flicked from the deck) */
 .card-flick-layer {
   position: absolute;
@@ -891,5 +969,54 @@ h1, h2, h3, h4, h5, h6 {
 @media (prefers-reduced-motion: reduce) {
   .card-flick-layer .flashcard-3d.card-flicking {
     animation-duration: 0.25s;
+  }
+}
+
+/* Reverse flick (Undo): the card flies straight back in from whichever side it left toward, at a
+   single fairly-quick speed (linear — no ease-in/out) so the return reads as a direct snap-back
+   rather than the slow-then-fast arc that suits the flick-off. */
+.card-flick-layer .flashcard-3d.card-flicking-back {
+  border-style: solid;
+  border-color: var(--flick-color, var(--color-good));
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+  animation: card-flick-on 0.3s linear forwards;
+}
+
+.card-flick-layer .flashcard-3d.card-flicking-back.card-flicking-back-right {
+  animation-name: card-flick-on-right;
+}
+
+@keyframes card-flick-on {
+  0% {
+    transform: translate(-140%, 44px) rotate(-17deg);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes card-flick-on-right {
+  0% {
+    transform: translate(140%, 44px) rotate(17deg);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-flick-layer .flashcard-3d.card-flicking-back {
+    animation-duration: 0.18s;
   }
 }

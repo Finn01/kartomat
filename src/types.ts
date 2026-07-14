@@ -91,7 +91,18 @@ export interface LearningProgramme {
   createdAt: number;
 }
 
+// How a learning card that hasn't graduated is re-queued for its next drill within a session:
+//   - 'append': pushed to the end of the visit history (see farthest away).
+//   - 'spread': spliced `redrill_offset` visits ahead of the current position (Anki-style short
+//     step — re-shown soon while still fresh). Inserts only ever land *ahead* of the cursor, so
+//     back-history stays stable (see StudySession's "semi-stable" navigation model).
+export type RedrillMode = 'append' | 'spread';
+
 export interface FSRSSettings {
   request_retention: number;
   maximum_interval: number;
+  // Session re-drill behaviour. Not part of the ts-fsrs scheduler config — consumed only by the
+  // StudySession queue — but stored alongside the scheduler settings for a single settings blob.
+  redrill_mode: RedrillMode;
+  redrill_offset: number; // cards ahead of the current one for 'spread' mode
 }

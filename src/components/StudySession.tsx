@@ -3,8 +3,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import type { Flashcard, CardProgress, FSRSSettings } from '../types';
 import { Rating, State } from 'ts-fsrs';
-import { reviewCard, createNewProgress, getNextReviewPreviews } from '../fsrs';
-import { X, Check, Eye, CheckCircle2, Clock } from 'lucide-react';
+import { reviewCard, createNewProgress, getNextReviewPreviews, getFSRSSettings } from '../fsrs';
+import { X, Check, Eye, CheckCircle2, Clock, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
 
 interface StudySessionProps {
   deckIds: string[] | null; // null means global study (all decks)
@@ -12,34 +12,63 @@ interface StudySessionProps {
   onClose: () => void;
 }
 
+// A single stop in the session's visit history. `visitId` is stable and unique even when the same
+// card is re-drilled (a learning card that didn't graduate is appended as a *new* visit), so
+// back/forward navigation and the per-visit rating/working-state maps have a reliable key.
 interface SessionQueueItem {
+  visitId: string;
   card: Flashcard;
   progress: CardProgress;
 }
 
-type RatingPreviews = ReturnType<typeof getNextReviewPreviews>;
+// The outcome recorded when a card is rated. Its presence in `answers` means the visit is locked;
+// ratings are final EXCEPT via the 3-second Undo of the single most recent rating. We keep the
+// interactive selections + reveal flag so navigating back restores exactly what the card looked
+// like, `autoAgain` so the UI can explain a forced rating, and enough to fully revert the commit:
+// the pre-review FSRS progress, whether it graduated (to undo the completed count), and the id of
+// any re-drill visit it spawned (to splice back out on undo).
+interface RecordedAnswer {
+  rating: Rating;
+  tfSelection: boolean | null;
+  clusterSelections: Record<number, boolean>;
+  showAnswer: boolean;
+  autoAgain: boolean;
+  prevProgress: CardProgress; // pre-review snapshot, restored to IndexedDB on undo
+  graduated: boolean;
+  redrillVisitId: string | null; // the re-drill this rating appended, if any
+}
+
+// The editable in-progress state for a not-yet-rated (skipped/deferred) visit, kept per visit so
+// that leaving a half-answered card and coming back preserves the reveal + selections.
+interface WorkingState {
+  showAnswer: boolean;
+  tfSelection: boolean | null;
+  clusterSelections: Record<number, boolean>;
+}
+
+const EMPTY_WORKING: WorkingState = { showAnswer: false, tfSelection: null, clusterSelections: {} };
 
 // Snapshot of the card being flicked away so the animation is immune to queue changes underneath.
 interface FlickSnapshot {
   item: SessionQueueItem;
   tfSelection: boolean | null;
   clusterSelections: Record<number, boolean>;
-  previews: RatingPreviews;
   color: string;
   height: number | null;
   graduated: boolean;
 }
 
-// Options controlling how a single card face is rendered (shared by the live card and the flick overlay).
+// Options controlling how a single card face is rendered (shared by the live card and the flick
+// overlay). Rating buttons no longer live inside the card — they are in the persistent bottom
+// control bar — so this only covers the card's own content, its interactive selections, and the
+// "Show Answer" reveal.
 interface CardFaceOptions {
   showAnswer: boolean;
   tfSelection: boolean | null;
   clusterSelections: Record<number, boolean>;
-  previews: RatingPreviews;
   setTfSelection: (value: boolean) => void;
   setClusterSelection: (idx: number, value: boolean) => void;
   onReveal: () => void;
-  onRate: (rating: Rating) => void;
   disabled: boolean;
 }
 
@@ -56,10 +85,53 @@ const flickColor = (rating: Rating, incorrect: boolean): string => {
 export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSSettings, onClose }) => {
   const [loading, setLoading] = useState(true);
   const [queue, setQueue] = useState<SessionQueueItem[]>([]);
-  const currentIdx = 0;
-  const [showAnswer, setShowAnswer] = useState(false);
+  // Stateful cursor into the visit history (was hard-coded to 0 when the queue was a live stack).
+  // Back/forward move this; rating auto-advances it. Always kept within [0, queue.length - 1].
+  const [currentIdx, setCurrentIdx] = useState(0);
   const [completedCount, setCompletedCount] = useState(0);
   const [sessionReviewedCount, setSessionReviewedCount] = useState(0);
+
+  // Re-drill placement for learning cards. Comes from global settings (per the product decision);
+  // customFSRSSettings already carries these through deriveFSRSSettings, and we fall back to the
+  // stored global settings when no per-programme override is supplied. Captured once at session
+  // start (in a state initializer) so it doesn't re-read localStorage every render, and so a
+  // mid-session settings change can't shift placement halfway through.
+  const [redrillSettings] = useState(() => customFSRSSettings ?? getFSRSSettings());
+  const redrillMode = redrillSettings.redrill_mode;
+  const redrillOffset = redrillSettings.redrill_offset;
+
+  // Write-once outcomes, keyed by visitId. Presence = the visit is rated and locked.
+  const [answers, setAnswers] = useState<Record<string, RecordedAnswer>>({});
+  // Editable in-progress state for not-yet-rated visits, keyed by visitId. A visit missing from
+  // this map defaults to EMPTY_WORKING (fresh, answer hidden).
+  const [working, setWorking] = useState<Record<string, WorkingState>>({});
+  // Monotonic counter for minting unique visitIds when a learning card is re-drilled.
+  const redrillSeqRef = useRef(0);
+
+  // Undo affordance: the visitId of the single most recent rating, offered for a 3s window during
+  // which the Back button becomes "Undo". Cleared on timeout, on the next rating, or on navigation.
+  const [undoVisitId, setUndoVisitId] = useState<string | null>(null);
+  const [undoSecondsLeft, setUndoSecondsLeft] = useState(0); // countdown shown on the Undo button
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const UNDO_WINDOW_MS = 3000;
+
+  // Drive the visible 3→1 countdown while an undo offer is open. Purely cosmetic; the authoritative
+  // expiry is the timeout armed in handleRate.
+  useEffect(() => {
+    if (!undoVisitId) return;
+    setUndoSecondsLeft(Math.ceil(UNDO_WINDOW_MS / 1000));
+    const started = Date.now();
+    const id = setInterval(() => {
+      const remainingMs = UNDO_WINDOW_MS - (Date.now() - started);
+      setUndoSecondsLeft(Math.max(0, Math.ceil(remainingMs / 1000)));
+    }, 250);
+    return () => clearInterval(id);
+  }, [undoVisitId]);
+
+  // Clear the undo timeout if the session unmounts mid-window so it can't fire after teardown.
+  useEffect(() => () => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+  }, []);
   // When true, review cards that aren't due yet are pulled into the queue too (opt-in "study
   // ahead" for when nothing is currently scheduled). Never affects new-card selection, which is
   // already included regardless of due dates.
@@ -68,12 +140,11 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   // anything to offer (kept separate from `queue` so it survives the due-only filtering).
   const [hasUpcomingCards, setHasUpcomingCards] = useState(false);
 
-  // Card type specific states
-  const [tfSelection, setTfSelection] = useState<boolean | null>(null);
-  const [clusterSelections, setClusterSelections] = useState<Record<number, boolean>>({});
-
   // Completion animation state (the card currently being flicked off the deck)
   const [flicking, setFlicking] = useState<FlickSnapshot | null>(null);
+  // Reverse-flick state: on Undo the card flies back *in* from whichever side it left, using the
+  // same snapshot (its `graduated` flag encodes the side). Cleared once the animation has played.
+  const [flickingBack, setFlickingBack] = useState<FlickSnapshot | null>(null);
   // Synchronous re-entrancy guard for handleRate: `flicking` state doesn't commit until the
   // next render, so a rapid double-click/double-tap could otherwise slip past that check.
   const ratingInFlightRef = useRef(false);
@@ -81,6 +152,11 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   // Measure the sticky header so the card can be sized to fit the viewport beneath it.
   const headerRef = useRef<HTMLDivElement>(null);
   const [headerHeight, setHeaderHeight] = useState(72);
+
+  // Measure the fixed bottom control bar (rating buttons + Back/Forward) so the card is sized to
+  // sit above it — the card and the controls must never overlap.
+  const footerRef = useRef<HTMLDivElement>(null);
+  const [footerHeight, setFooterHeight] = useState(148);
 
   // Track viewport height numerically (in addition to the CSS dvh clamp) so we can cap the
   // animated card height in JS — animating toward a value beyond the CSS max-height would be
@@ -128,6 +204,22 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     return () => ro.disconnect();
   }, [loading]);
 
+  // Measure the fixed control bar; its height feeds the card-sizing math so content never sits
+  // under the controls. Re-measures on resize (button labels/intervals can change its height).
+  useLayoutEffect(() => {
+    const el = footerRef.current;
+    if (!el) return;
+    const update = () => setFooterHeight(el.offsetHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [loading]);
+
+  // The current visit's stable id — drives the height-snap effect below (a new card mounting)
+  // and, further down, the derived per-visit view state.
+  const activeVisitId = queue[currentIdx]?.visitId ?? null;
+
   // Track the live card's natural content height and mirror it onto the outer card as an
   // animated `height`, so growth (e.g. revealing the answer) reads as a fluid downward
   // extension rather than an instant jump. Height changes triggered by swapping to a new
@@ -150,7 +242,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
       ro.disconnect();
       cancelAnimationFrame(enableAnim);
     };
-  }, [queue.length > 0 ? queue[currentIdx].card.id : null]);
+  }, [activeVisitId]);
 
   // Rebuild the queue only when the *inputs that define the session* change (deck selection or
   // the study-ahead toggle) — not on every progress write. This guard is reset in that effect's
@@ -179,16 +271,20 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
       for (const card of filteredCards) {
         let prog = allProgress.find(p => p.cardId === card.id);
 
+        // Each card appears at most once in the initial queue, so keying its first visit off the
+        // card id is unique. Re-drilled learning cards mint fresh ids (see handleRate).
+        const visitId = `v0:${card.id}`;
+
         if (!prog) {
           // It's a new card, create new progress but don't save to DB until reviewed
           prog = createNewProgress(card.id, card.deckId);
-          newItems.push({ card, progress: prog });
+          newItems.push({ visitId, card, progress: prog });
         } else {
           const isDue = new Date(prog.due) <= now;
           if (isDue) {
-            dueItems.push({ card, progress: prog });
+            dueItems.push({ visitId, card, progress: prog });
           } else {
-            upcomingItems.push({ card, progress: prog });
+            upcomingItems.push({ visitId, card, progress: prog });
           }
         }
       }
@@ -239,8 +335,16 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     );
   }
 
-  // Handle empty queue — but let a final flick finish playing before showing the summary.
-  if (queue.length === 0 && !flicking) {
+  // The session is finished once every visit in the queue has been rated (write-once). Skipped
+  // (deferred) cards keep the session open — a skip defers a card, it never dismisses it — and
+  // re-drilled learning cards are appended as fresh unrated visits, so "all visits rated" is the
+  // single, drift-free completion signal.
+  const allRated = queue.length > 0 && queue.every(item => answers[item.visitId] !== undefined);
+
+  // Handle empty queue / fully-rated session — but let a final flick finish playing first, and keep
+  // the session UI up while an undo offer is open so the *last* rating stays undoable (the
+  // completion screen would otherwise hide the Undo button).
+  if ((queue.length === 0 || allRated) && !flicking && !undoVisitId) {
     // Nothing was ever reviewed this session: either the deck had nothing due to begin with,
     // or "Study ahead" is on but everything upcoming has now been reviewed too.
     if (sessionReviewedCount === 0) {
@@ -289,112 +393,250 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     );
   }
 
-  const currentItem = queue.length > 0 ? queue[currentIdx] : null;
+  const currentItem = queue[currentIdx] ?? null;
+  const currentVisitId = currentItem?.visitId ?? '';
+  const recorded = currentItem ? answers[currentVisitId] : undefined;
+  const isLocked = recorded !== undefined;
 
-  const handleReveal = () => {
-    setShowAnswer(true);
+  // View state for the current visit is derived: a rated visit renders its frozen recorded state,
+  // an un-rated visit its editable working state (default: answer hidden). A card can now be rated
+  // without revealing, so a locked visit restores whatever reveal state it had at rating time.
+  const workingState = working[currentVisitId] ?? EMPTY_WORKING;
+  const showAnswer = isLocked ? recorded.showAnswer : workingState.showAnswer;
+  const tfSelection = isLocked ? recorded.tfSelection : workingState.tfSelection;
+  const clusterSelections = isLocked ? recorded.clusterSelections : workingState.clusterSelections;
+
+  // Mutate the current visit's working state (no-op once locked — ratings are final).
+  const patchWorking = (patch: Partial<WorkingState>) => {
+    if (isLocked) return;
+    setWorking(prev => ({
+      ...prev,
+      [currentVisitId]: { ...(prev[currentVisitId] ?? EMPTY_WORKING), ...patch },
+    }));
+  };
+
+  const handleReveal = () => patchWorking({ showAnswer: true });
+  const setTfSelection = (value: boolean) => patchWorking({ tfSelection: value });
+  const setClusterSelection = (idx: number, value: boolean) =>
+    patchWorking({ clusterSelections: { ...clusterSelections, [idx]: value } });
+
+  // Cancel the pending undo offer (timer + flag). Called on navigation, on the next rating, and
+  // after an undo is performed, so only the single latest rating is ever undoable.
+  const clearUndo = () => {
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+    setUndoVisitId(null);
+  };
+
+  const goBack = () => {
+    clearUndo();
+    if (currentIdx > 0) setCurrentIdx(currentIdx - 1);
+  };
+  const goForward = () => {
+    clearUndo();
+    if (currentIdx < queue.length - 1) setCurrentIdx(currentIdx + 1);
   };
 
   const handleRate = async (rating: Rating) => {
-    // Ignore new ratings while a flick animation is in flight. Checked synchronously via a ref
-    // (rather than relying solely on `flicking` state) so a rapid double-click/double-tap can't
-    // slip through before the state update from the first call has committed.
-    if (flicking || ratingInFlightRef.current) return;
+    // Ignore ratings while a flick is in flight or the visit is already locked. The ref guard is
+    // synchronous so a rapid double-tap can't slip past before `flicking` state commits.
+    if (flicking || ratingInFlightRef.current || isLocked || !currentItem) return;
     ratingInFlightRef.current = true;
 
-    const item = queue[currentIdx];
-    if (!item) {
-      ratingInFlightRef.current = false;
-      return;
-    }
-    const { card, progress } = item;
-    const cardId = card.id;
+    const item = currentItem;
+    const { card, progress, visitId } = item;
 
-    // Determine if an interactive card was answered incorrectly (drives the red flick border).
-    const isInteractive = card.type === 'truefalse' || card.type === 'cluster';
-    let incorrect = false;
+    // Rating a new card supersedes any pending undo — only the latest rating is ever undoable.
+    clearUndo();
+
+    // An interactive card that was *answered* incorrectly forces "Again" (unanswered does not —
+    // then the user is self-grading, and their pressed rating stands). Mirrors `forcedAgain` above.
+    let autoAgain = false;
     if (card.type === 'truefalse') {
-      incorrect = tfSelection !== card.answer;
+      autoAgain = tfSelection !== null && tfSelection !== card.answer;
     } else if (card.type === 'cluster') {
-      incorrect = card.items.some((clItem, idx) => clusterSelections[idx] !== clItem.answer);
+      const fullyAnswered = card.items.every((_, idx) => clusterSelections[idx] !== undefined);
+      autoAgain = fullyAnswered && card.items.some((clItem, idx) => clusterSelections[idx] !== clItem.answer);
     }
-    const flickIncorrect = isInteractive && incorrect;
+    // A wrong interactive answer is always committed as "Again", regardless of which button fired
+    // this call — the UI blocks the others, and coercing here keeps the DB honest even so.
+    const effectiveRating = autoAgain ? Rating.Again : rating;
 
-    // 1. Commit rating to IndexedDB
-    const updatedProgress = await reviewCard(progress, rating, customFSRSSettings);
+    // 1. Commit rating to IndexedDB. `progress` is the pre-review snapshot — we stash it in the
+    //    recorded answer so Undo can restore it (this is the one sanctioned re-write of progress).
+    const updatedProgress = await reviewCard(progress, effectiveRating, customFSRSSettings);
     setSessionReviewedCount(prev => prev + 1);
 
-    // A card only *completes* (leaves this session) once FSRS moves it into the Review state —
-    // see the longer explanation below. Computed here (before the queue re-handling) so the
-    // flick snapshot can flick graduated cards right and re-drilled cards left.
+    // A card only *completes* (leaves the learning loop) once FSRS moves it into the Review state.
     const hasGraduated = updatedProgress.state === State.Review;
 
-    // 2. Snapshot the outgoing card (including its current pixel height) so it keeps rendering
-    //    at a stable size as it flicks away, independent of the next card revealed beneath it.
+    // 2. Snapshot the outgoing card so the flick animation is immune to the swap beneath it.
     setFlicking({
       item,
       tfSelection,
       clusterSelections,
-      previews: getNextReviewPreviews(progress, customFSRSSettings),
-      color: flickColor(rating, flickIncorrect),
+      color: flickColor(effectiveRating, autoAgain),
       height: baseCardRef.current?.offsetHeight ?? null,
       graduated: hasGraduated,
     });
 
-    // 3. Reset interactive/reveal state for the next card (revealed beneath the flicking card)
-    setTfSelection(null);
-    setClusterSelections({});
-    setShowAnswer(false);
-
-    // 4. Spaced repetition queue re-handling — Anki-style learning steps.
-    // A card only *completes* (leaves this session) once FSRS moves it into the Review state,
-    // i.e. it has graduated out of its short-term learning/relearning steps and is scheduled a
-    // real interval away. While it is still Learning/Relearning it stays in the session and is
-    // re-drilled a few cards later. This covers:
-    //   - Again on anything → Learning/Relearning → re-drill
-    //   - Good/Hard on a still-learning (e.g. new) card → next learning step (~10m) → re-drill
-    //   - Easy on a new card, or any passing grade on a matured Review card → Review → complete
-    // `completedCount` therefore counts genuine graduations, which keeps it in lockstep with the
-    // queue: a re-drilled card stays counted in `queue.length` until it graduates, at which point
-    // it moves to `completedCount` — so Remaining + Completed never double-count or drift.
-    if (!hasGraduated) {
-      // Still in a learning step — put it back in the queue, a few cards later, so it isn't shown
-      // again immediately.
-      setQueue(prevQueue => {
-        const idx = prevQueue.findIndex(q => q.card.id === cardId);
-        if (idx === -1) return prevQueue; // already removed by a duplicate/racing call
-
-        const updatedQueue = [...prevQueue];
-        updatedQueue.splice(idx, 1);
-
-        const newQueueItem: SessionQueueItem = {
-          card,
-          progress: updatedProgress
-        };
-
-        const insertIdx = Math.min(updatedQueue.length, 3);
-        updatedQueue.splice(insertIdx, 0, newQueueItem);
-
-        return updatedQueue;
-      });
-    } else {
-      // Graduated to Review — done for this session and scheduled a real interval into the future.
+    // 3. Spaced-repetition re-handling — Anki-style learning steps.
+    // A card graduates (leaves the learning loop) once FSRS moves it into the Review state, i.e.
+    // it's scheduled a real interval away. While still Learning/Relearning it must be re-drilled,
+    // which we do by inserting a fresh unrated visit of the same card *ahead of the current cursor*.
+    // Placement follows the re-drill setting: 'append' pushes to the end, 'spread' splices
+    // `redrillOffset` cards ahead. Inserting only ahead of `currentIdx` keeps the back-history
+    // stable (the "semi-stable" model: fixed past, moving future). The just-rated visit stays
+    // locked in place; the new visit is what gets re-answered. `completedCount` counts graduations.
+    //
+    // We build the projected queue locally (rather than only inside the setQueue updater) so the
+    // advance in step 5 can reason about the exact same post-insert list and the just-rated card.
+    let redrillInsertIdx = -1;
+    let redrillVisitId: string | null = null;
+    let projectedQueue = queue;
+    if (hasGraduated) {
       setCompletedCount(prev => prev + 1);
-      setQueue(prevQueue => {
-        const idx = prevQueue.findIndex(q => q.card.id === cardId);
-        if (idx === -1) return prevQueue; // already removed by a duplicate/racing call
-
-        const updatedQueue = [...prevQueue];
-        updatedQueue.splice(idx, 1);
-        return updatedQueue;
-      });
+    } else {
+      redrillVisitId = `r${redrillSeqRef.current++}:${card.id}`;
+      const newVisit: SessionQueueItem = { visitId: redrillVisitId, card, progress: updatedProgress };
+      redrillInsertIdx = redrillMode === 'append'
+        ? queue.length
+        : Math.min(queue.length, Math.max(currentIdx + redrillOffset, currentIdx + 1));
+      projectedQueue = [...queue];
+      projectedQueue.splice(redrillInsertIdx, 0, newVisit);
+      setQueue(projectedQueue);
     }
 
-    // 5. Clear the flick snapshot once the animation has played.
-    setTimeout(() => {
-      setFlicking(null);
-      ratingInFlightRef.current = false;
-    }, FLICK_DURATION_MS);
+    // 4. Record the outcome, locking this visit. Carries everything Undo needs: the pre-review
+    //    progress, the reveal/selection state to restore, whether it graduated, and any re-drill id.
+    setAnswers(prev => ({
+      ...prev,
+      [visitId]: {
+        rating: effectiveRating,
+        tfSelection,
+        clusterSelections,
+        showAnswer,
+        autoAgain,
+        prevProgress: progress,
+        graduated: hasGraduated,
+        redrillVisitId,
+      },
+    }));
+
+    // 5. Advance to the next card that still needs a rating. "Needs a rating" = not in `answers`
+    //    (which predates this write, so we also exclude the just-rated `visitId`) and not the
+    //    freshly inserted re-drill's own slot... which we *want* to land on, so it's treated as
+    //    unrated. We search forward from the cursor first (preserving momentum and keeping Back
+    //    available), then wrap to sweep up earlier skipped cards. If nothing is left unrated the
+    //    cursor holds and the completion screen takes over.
+    const isUnrated = (idx: number): boolean => {
+      if (idx === redrillInsertIdx) return true; // the new re-drill is unrated by construction
+      const q = projectedQueue[idx];
+      return q.visitId !== visitId && answers[q.visitId] === undefined;
+    };
+    setCurrentIdx(prevIdx => {
+      for (let idx = prevIdx + 1; idx < projectedQueue.length; idx++) {
+        if (isUnrated(idx)) return idx;
+      }
+      for (let idx = 0; idx <= prevIdx && idx < projectedQueue.length; idx++) {
+        if (isUnrated(idx)) return idx;
+      }
+      return prevIdx; // nothing left unrated — completion screen takes over
+    });
+
+    // 6. The commit + queue updates are done, so release the rate re-entrancy guard *now* — this is
+    //    what lets Undo act instantly, even while the flick below is still playing (a new *rating*
+    //    is still blocked meanwhile by the `flicking` check at the top of handleRate). The flick
+    //    snapshot itself is cleared only once its animation has finished.
+    ratingInFlightRef.current = false;
+    setTimeout(() => setFlicking(null), FLICK_DURATION_MS);
+
+    // 7. Open the 3-second Undo window on this rating (the Back button becomes "Undo"). The timer
+    //    just retires the offer; the actual revert lives in handleUndo.
+    setUndoVisitId(visitId);
+    undoTimerRef.current = setTimeout(() => {
+      undoTimerRef.current = null;
+      setUndoVisitId(null);
+    }, UNDO_WINDOW_MS);
+  };
+
+  // Fully revert the most recent rating (only available during its 3s window). Undoes every effect
+  // of that handleRate call: restores the pre-review FSRS progress in IndexedDB, removes the
+  // re-drill it spawned, unlocks the visit, rolls back the counters, and returns the cursor to it.
+  // Usable instantly — even while the outbound flick is still playing — so it does NOT gate on
+  // `flicking`; only the true commit-in-progress lock (`ratingInFlightRef`) blocks it.
+  const handleUndo = async () => {
+    if (ratingInFlightRef.current) return;
+    const targetId = undoVisitId;
+    if (!targetId) return;
+    const rec = answers[targetId];
+    if (!rec) {
+      clearUndo();
+      return;
+    }
+    clearUndo();
+
+    // Build the reverse-flick snapshot before mutating state. Reuse the live outbound snapshot if
+    // it's still on screen (undo pressed mid-flick); otherwise reconstruct from the recorded answer
+    // and the card in the queue. Either way `graduated` encodes which side it left toward.
+    const undoneItem = queue.find(q => q.visitId === targetId);
+    const backSnapshot: FlickSnapshot | null =
+      flicking && flicking.item.visitId === targetId
+        ? flicking
+        : undoneItem
+        ? {
+            item: undoneItem,
+            tfSelection: rec.tfSelection,
+            clusterSelections: rec.clusterSelections,
+            color: flickColor(rec.rating, rec.autoAgain),
+            height: baseCardRef.current?.offsetHeight ?? null,
+            graduated: rec.graduated,
+          }
+        : null;
+
+    // Interrupt any outbound flick still in flight so it doesn't linger over the returning card.
+    setFlicking(null);
+    ratingInFlightRef.current = false;
+
+    // 1. Restore the pre-review FSRS state. A card that was brand-new before this rating had no
+    //    persisted progress row (its snapshot came from createNewProgress, never written); delete
+    //    the row so it returns to truly-new rather than leaving a synthetic New-state record.
+    const wasNew = rec.prevProgress.reps === 0 && rec.prevProgress.last_review === undefined;
+    if (wasNew) {
+      await db.progress.delete(rec.prevProgress.cardId);
+    } else {
+      await db.progress.put(rec.prevProgress);
+    }
+
+    // 2. Roll back the session counters.
+    setSessionReviewedCount(prev => Math.max(0, prev - 1));
+    if (rec.graduated) setCompletedCount(prev => Math.max(0, prev - 1));
+
+    // 3. Unlock the visit.
+    setAnswers(prev => {
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+
+    // 4. Remove the re-drill this rating spawned (if any), then point the cursor at the just-undone
+    //    card. Its position is stable — inserts only ever land ahead of it and no rating happened
+    //    after it (rating clears the undo) — so we locate it by id in the post-removal queue.
+    const nextQueue = rec.redrillVisitId
+      ? queue.filter(q => q.visitId !== rec.redrillVisitId)
+      : queue;
+    if (rec.redrillVisitId) setQueue(nextQueue);
+    const idx = nextQueue.findIndex(q => q.visitId === targetId);
+    if (idx !== -1) setCurrentIdx(idx);
+
+    // 5. Play the reverse flick: the card flies back in from the side it left. The live card is
+    //    already the undone card underneath, so this overlay just animates the return over it.
+    if (backSnapshot) {
+      setFlickingBack(backSnapshot);
+      setTimeout(() => setFlickingBack(null), FLICK_DURATION_MS);
+    }
   };
 
   // Helper to parse and render Cloze front/back
@@ -418,15 +660,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   // live interactive card and the frozen snapshot that flicks off the deck.
   const renderCardFace = (item: SessionQueueItem, opts: CardFaceOptions) => {
     const { card } = item;
-    const { showAnswer: reveal, tfSelection: tf, clusterSelections: clusters, previews } = opts;
-
-    const isInteractive = card.type === 'truefalse' || card.type === 'cluster';
-    let isAnsweredIncorrectly = false;
-    if (card.type === 'truefalse') {
-      isAnsweredIncorrectly = tf !== card.answer;
-    } else if (card.type === 'cluster') {
-      isAnsweredIncorrectly = card.items.some((it, idx) => clusters[idx] !== it.answer);
-    }
+    const { showAnswer: reveal, tfSelection: tf, clusterSelections: clusters } = opts;
 
     return (
       <>
@@ -482,7 +716,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
               {/* User Input Selection */}
               <div style={{ display: 'flex', gap: '12px', marginTop: '10px' }}>
                 <button
-                  disabled={reveal}
+                  disabled={reveal || opts.disabled}
                   onClick={() => opts.setTfSelection(true)}
                   className="btn"
                   style={{
@@ -497,7 +731,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
                   Ja / Wahr (True)
                 </button>
                 <button
-                  disabled={reveal}
+                  disabled={reveal || opts.disabled}
                   onClick={() => opts.setTfSelection(false)}
                   className="btn"
                   style={{
@@ -624,7 +858,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
                       {/* Ja/Nein Switch for the item */}
                       <div style={{ display: 'flex', gap: '8px', alignSelf: 'flex-end' }}>
                         <button
-                          disabled={reveal}
+                          disabled={reveal || opts.disabled}
                           onClick={() => opts.setClusterSelection(idx, true)}
                           style={{
                             padding: '4px 10px',
@@ -641,7 +875,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
                           Ja
                         </button>
                         <button
-                          disabled={reveal}
+                          disabled={reveal || opts.disabled}
                           onClick={() => opts.setClusterSelection(idx, false)}
                           style={{
                             padding: '4px 10px',
@@ -674,143 +908,33 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
 
         </div>
 
-        {/* Card Footer (Action Controls) */}
+        {/* Card Footer — only the reveal action lives inside the card now. Rating happens in the
+            persistent bottom control bar, so the answer content stays clear of the controls. */}
         <div>
-          {!reveal ? (
+          {!reveal && (
             <button className="btn btn-primary" disabled={opts.disabled} onClick={opts.onReveal} style={{ width: '100%', padding: '14px' }}>
               <Eye size={18} /> Show Answer
             </button>
-          ) : isInteractive && isAnsweredIncorrectly ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {/* Single big Again button */}
-              <button
-                disabled={opts.disabled}
-                onClick={() => opts.onRate(Rating.Again)}
-                className="btn btn-primary"
-                style={{
-                  width: '100%',
-                  padding: '14px',
-                  background: 'linear-gradient(135deg, var(--color-easy), #1d4ed8)',
-                  borderColor: 'var(--color-easy)',
-                  boxShadow: '0 4px 12px var(--color-easy-glow)',
-                  color: '#ffffff',
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  cursor: 'pointer'
-                }}
-              >
-                <span style={{ fontSize: '0.95rem', fontWeight: 'bold' }}>Next Card</span>
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-
-              {/* Rating Guide Prompt */}
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginBottom: '4px' }}>
-                Rate your recall difficulty to schedule next review:
-              </p>
-
-              {/* Grid of four buttons */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-
-                {/* Rating.Again */}
-                <button
-                  disabled={opts.disabled}
-                  onClick={() => opts.onRate(Rating.Again)}
-                  className="btn"
-                  style={{
-                    flexDirection: 'column',
-                    background: 'var(--bg-surface)',
-                    borderColor: 'rgba(244, 63, 94, 0.3)',
-                    color: 'var(--color-again)',
-                    borderStyle: 'solid',
-                    borderWidth: '1px',
-                    padding: '8px 4px'
-                  }}
-                >
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                    {previews[Rating.Again].interval}
-                  </span>
-                  <span style={{ fontSize: '0.88rem', fontWeight: 'bold' }}>Again</span>
-                </button>
-
-                {/* Rating.Hard */}
-                <button
-                  disabled={opts.disabled}
-                  onClick={() => opts.onRate(Rating.Hard)}
-                  className="btn"
-                  style={{
-                    flexDirection: 'column',
-                    background: 'var(--bg-surface)',
-                    borderColor: 'rgba(245, 158, 11, 0.3)',
-                    color: 'var(--color-hard)',
-                    borderStyle: 'solid',
-                    borderWidth: '1px',
-                    padding: '8px 4px'
-                  }}
-                >
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                    {previews[Rating.Hard].interval}
-                  </span>
-                  <span style={{ fontSize: '0.88rem', fontWeight: 'bold' }}>Hard</span>
-                </button>
-
-                {/* Rating.Good */}
-                <button
-                  disabled={opts.disabled}
-                  onClick={() => opts.onRate(Rating.Good)}
-                  className="btn"
-                  style={{
-                    flexDirection: 'column',
-                    background: 'var(--bg-surface)',
-                    borderColor: 'rgba(16, 185, 129, 0.3)',
-                    color: 'var(--color-good)',
-                    borderStyle: 'solid',
-                    borderWidth: '1px',
-                    padding: '8px 4px'
-                  }}
-                >
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                    {previews[Rating.Good].interval}
-                  </span>
-                  <span style={{ fontSize: '0.88rem', fontWeight: 'bold' }}>Good</span>
-                </button>
-
-                {/* Rating.Easy */}
-                <button
-                  disabled={opts.disabled}
-                  onClick={() => opts.onRate(Rating.Easy)}
-                  className="btn"
-                  style={{
-                    flexDirection: 'column',
-                    background: 'var(--bg-surface)',
-                    borderColor: 'rgba(59, 130, 246, 0.3)',
-                    color: 'var(--color-easy)',
-                    borderStyle: 'solid',
-                    borderWidth: '1px',
-                    padding: '8px 4px'
-                  }}
-                >
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                    {previews[Rating.Easy].interval}
-                  </span>
-                  <span style={{ fontSize: '0.88rem', fontWeight: 'bold' }}>Easy</span>
-                </button>
-
-              </div>
-            </div>
           )}
         </div>
       </>
     );
   };
 
-  const total = completedCount + queue.length;
-  const progressPercent = total > 0 ? Math.round((completedCount / total) * 100) : 100;
+  // Counters over the append-only visit history: `ratedCount` visits are locked, the rest still
+  // need a rating (skipped/deferred cards + any pending learning re-drills). Progress is rated /
+  // total visits so appending a re-drill nudges the bar back — you genuinely have more to do.
+  const ratedCount = Object.keys(answers).length;
+  const remainingCount = queue.length - ratedCount;
+  const progressPercent = queue.length > 0 ? Math.round((ratedCount / queue.length) * 100) : 100;
 
-  // Size the card to fit under the sticky header; once content exceeds this, the whole card scrolls.
-  const cardMaxHeight = `calc(100dvh - ${headerHeight}px - 96px - env(safe-area-inset-bottom, 0px))`;
+  // Size the card to fit between the sticky header and the fixed bottom control bar, so the card
+  // and the controls never overlap. Besides the measured header/footer we must also reserve the
+  // flex gap under the header (20px) and the .card-wrapper's own top+bottom margin (16px each),
+  // plus a few px so the card's bottom border clears the bar. The card scrolls internally, so
+  // clamping here only affects how far it extends, not what content is reachable.
+  const cardVReserve = headerHeight + footerHeight + 56;
+  const cardMaxHeight = `calc(100dvh - ${cardVReserve}px - env(safe-area-inset-bottom, 0px))`;
   const cardSizing: React.CSSProperties = {
     maxHeight: cardMaxHeight,
     minHeight: `min(380px, ${cardMaxHeight})`,
@@ -818,13 +942,46 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   // Numeric twin of cardMaxHeight, used to clamp the animated height target below — animating
   // `height` toward a value beyond the CSS max-height would just be clipped instantly with no
   // visible transition, so we cap the JS target at the same limit.
-  const cardMaxHeightPx = Math.max(200, viewportHeight - headerHeight - 96);
+  const cardMaxHeightPx = Math.max(200, viewportHeight - cardVReserve);
   // Animate the card's own height to its measured content height so growth (e.g. revealing the
   // answer) reads as a fluid downward extension, right up to the viewport clamp.
   const liveCardSizing: React.CSSProperties = {
     ...cardSizing,
     ...(cardContentHeight != null ? { height: `${Math.min(cardContentHeight, cardMaxHeightPx)}px` } : {}),
   };
+
+  // Interval previews for the current card's rating buttons (from its pre-review progress).
+  const currentPreviews = currentItem ? getNextReviewPreviews(currentItem.progress, customFSRSSettings) : null;
+
+  // An interactive card (true/false, cluster) that has been *answered* incorrectly forces "Again":
+  // the spec is "auto-selects Again for poor answers, and you can't change an auto-set Again". This
+  // no longer depends on revealing the answer. An *unanswered* interactive card is NOT forced —
+  // the user is then self-grading (rating stands as pressed), same as a basic card.
+  let forcedAgain = false;
+  if (currentItem && !isLocked) {
+    const c = currentItem.card;
+    if (c.type === 'truefalse') {
+      forcedAgain = tfSelection !== null && tfSelection !== c.answer;
+    } else if (c.type === 'cluster') {
+      const fullyAnswered = c.items.every((_, idx) => clusterSelections[idx] !== undefined);
+      forcedAgain = fullyAnswered && c.items.some((it, idx) => clusterSelections[idx] !== it.answer);
+    }
+  }
+
+  // The highlighted rating: a locked visit shows its recorded choice; an unrated forced-Again card
+  // shows Again pre-selected.
+  const selectedRating = recorded?.rating ?? (forcedAgain ? Rating.Again : null);
+  // Rating buttons are actionable as long as the visit isn't already locked and no flick is
+  // mid-flight — the answer no longer has to be revealed first.
+  const canRate = !!currentItem && !isLocked && !flicking;
+
+  // Static per-rating presentation (colour + label), indexed by Rating enum value.
+  const RATING_META: { rating: Rating; label: string; color: string; border: string }[] = [
+    { rating: Rating.Again, label: 'Again', color: 'var(--color-again)', border: 'rgba(244, 63, 94, 0.3)' },
+    { rating: Rating.Hard, label: 'Hard', color: 'var(--color-hard)', border: 'rgba(245, 158, 11, 0.3)' },
+    { rating: Rating.Good, label: 'Good', color: 'var(--color-good)', border: 'rgba(16, 185, 129, 0.3)' },
+    { rating: Rating.Easy, label: 'Easy', color: 'var(--color-easy)', border: 'rgba(59, 130, 246, 0.3)' },
+  ];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -860,7 +1017,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
               </span>
             )}
             <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-              Remaining: {queue.length}
+              Remaining: {remainingCount}
             </span>
             <span style={{ fontSize: '0.85rem', color: 'var(--color-good)', fontWeight: 600 }}>
               Completed: {completedCount}
@@ -895,12 +1052,10 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
                 showAnswer,
                 tfSelection,
                 clusterSelections,
-                previews: getNextReviewPreviews(currentItem.progress, customFSRSSettings),
-                setTfSelection: (value) => setTfSelection(value),
-                setClusterSelection: (idx, value) => setClusterSelections(prev => ({ ...prev, [idx]: value })),
+                setTfSelection,
+                setClusterSelection,
                 onReveal: handleReveal,
-                onRate: handleRate,
-                disabled: flicking !== null,
+                disabled: flicking !== null || isLocked,
               })}
             </div>
           </div>
@@ -918,17 +1073,128 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
                   showAnswer: true,
                   tfSelection: flicking.tfSelection,
                   clusterSelections: flicking.clusterSelections,
-                  previews: flicking.previews,
                   setTfSelection: () => {},
                   setClusterSelection: () => {},
                   onReveal: () => {},
-                  onRate: () => {},
                   disabled: true,
                 })}
               </div>
             </div>
           </div>
         )}
+
+        {/* Reverse-flick overlay — on Undo the card flies back in from the side it left toward */}
+        {flickingBack && (
+          <div className="card-flick-layer" style={{ ['--flick-color' as string]: flickingBack.color } as React.CSSProperties}>
+            <div
+              className={`flashcard-3d showing-answer card-flicking-back${flickingBack.graduated ? ' card-flicking-back-right' : ''}`}
+              style={{ ...cardSizing, height: flickingBack.height != null ? `${flickingBack.height}px` : undefined }}
+            >
+              <div className="flashcard-3d-content">
+                {renderCardFace(flickingBack.item, {
+                  showAnswer: true,
+                  tfSelection: flickingBack.tfSelection,
+                  clusterSelections: flickingBack.clusterSelections,
+                  setTfSelection: () => {},
+                  setClusterSelection: () => {},
+                  onReveal: () => {},
+                  disabled: true,
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Persistent bottom control bar — always-visible recall ratings above a Back/Forward row.
+          Fixed to the viewport bottom so it never scrolls with (or overlaps) the card. */}
+      <div ref={footerRef} className="session-control-bar">
+        {/* Rating hint / lock explanation */}
+        <p className="session-rating-hint">
+          {isLocked
+            ? recorded?.autoAgain
+              ? 'Auto-rated “Again” for an incorrect answer — this rating is locked.'
+              : 'Already rated — ratings are final within a session.'
+            : forcedAgain
+            ? 'Incorrect answer — this rates as “Again”.'
+            : 'Rate your recall difficulty to schedule the next review:'}
+        </p>
+
+        {/* Four always-visible rating buttons */}
+        <div className="session-rating-grid">
+          {RATING_META.map(({ rating, label, color, border }) => {
+            const isSelected = selectedRating === rating;
+            // A forced-Again card locks the other three ratings out even before commit; a locked
+            // visit dims every rating except the recorded one. Otherwise all four are actionable.
+            const blocked = forcedAgain && rating !== Rating.Again;
+            const clickable = canRate && !blocked;
+            const dimmed = (isLocked && !isSelected) || blocked;
+            return (
+              <button
+                key={rating}
+                type="button"
+                disabled={!clickable}
+                aria-pressed={isSelected}
+                onClick={() => clickable && handleRate(rating)}
+                className={`session-rating-btn btn${isSelected ? ' is-selected' : ''}`}
+                style={{
+                  flexDirection: 'column',
+                  background: isSelected ? color : 'var(--bg-surface)',
+                  borderColor: isSelected ? color : border,
+                  color: isSelected ? '#fff' : color,
+                  borderStyle: 'solid',
+                  borderWidth: '1px',
+                  padding: '8px 4px',
+                  opacity: dimmed ? 0.4 : 1,
+                  cursor: clickable ? 'pointer' : 'default',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    color: isSelected ? 'rgba(255,255,255,0.85)' : 'var(--text-muted)',
+                  }}
+                >
+                  {currentPreviews ? currentPreviews[rating].interval : ''}
+                </span>
+                <span style={{ fontSize: '0.88rem', fontWeight: 'bold' }}>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Back / Forward navigation row. While an undo offer is open the Back slot becomes a timed
+            Undo button that reverts the most recent rating. */}
+        <div className="session-nav-row">
+          {undoVisitId ? (
+            <button
+              type="button"
+              className="btn btn-secondary session-nav-btn session-undo-btn"
+              onClick={handleUndo}
+            >
+              <RotateCcw size={16} /> Undo{undoSecondsLeft > 0 ? ` (${undoSecondsLeft})` : ''}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-secondary session-nav-btn"
+              onClick={goBack}
+              disabled={currentIdx === 0 || !!flicking}
+            >
+              <ChevronLeft size={18} /> Back
+            </button>
+          )}
+          <span className="session-nav-pos">{queue.length > 0 ? currentIdx + 1 : 0} / {queue.length}</span>
+          <button
+            type="button"
+            className="btn btn-secondary session-nav-btn"
+            onClick={goForward}
+            disabled={currentIdx >= queue.length - 1 || !!flicking}
+          >
+            Forward <ChevronRight size={18} />
+          </button>
+        </div>
       </div>
 
     </div>

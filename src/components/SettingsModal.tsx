@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { getFSRSSettings, saveFSRSSettings } from '../fsrs';
 import { exportBackupJson, restoreBackupJson } from '../db';
-import { X, Download, Upload, Sliders, Database, Info, RefreshCw } from 'lucide-react';
-import type { FSRSSettings } from '../types';
+import { X, Download, Upload, Sliders, Database, Info, RefreshCw, Repeat } from 'lucide-react';
+import type { FSRSSettings, RedrillMode } from '../types';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface SettingsModalProps {
@@ -15,7 +15,7 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ needRefresh, updateServiceWorker, onClose, onDatabaseReset }) => {
   useBodyScrollLock(true);
 
-  const [settings, setSettings] = useState<FSRSSettings>({ request_retention: 0.90, maximum_interval: 36500 });
+  const [settings, setSettings] = useState<FSRSSettings>({ request_retention: 0.90, maximum_interval: 36500, redrill_mode: 'spread', redrill_offset: 3 });
   const [importStatus, setImportStatus] = useState<{ type: 'idle' | 'success' | 'error'; message: string }>({ type: 'idle', message: '' });
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
@@ -35,6 +35,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ needRefresh, updat
   const handleMaxIntervalChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value) || 36500;
     const newSettings = { ...settings, maximum_interval: val };
+    setSettings(newSettings);
+    saveFSRSSettings(newSettings);
+  };
+
+  const handleRedrillModeChange = (mode: RedrillMode) => {
+    const newSettings = { ...settings, redrill_mode: mode };
+    setSettings(newSettings);
+    saveFSRSSettings(newSettings);
+  };
+
+  const handleRedrillOffsetChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Clamp to [1, 50]; an empty/invalid field falls back to the default of 3.
+    const raw = parseInt(e.target.value);
+    const val = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 50) : 3;
+    const newSettings = { ...settings, redrill_offset: val };
     setSettings(newSettings);
     saveFSRSSettings(newSettings);
   };
@@ -165,17 +180,85 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ needRefresh, updat
 
           <div className="form-group">
             <label className="form-label">Maximum Review Interval (Days)</label>
-            <input 
-              type="number" 
-              className="form-control" 
-              min="7" 
-              max="36500" 
-              value={settings.maximum_interval} 
-              onChange={handleMaxIntervalChange} 
+            <input
+              type="number"
+              className="form-control"
+              min="7"
+              max="36500"
+              value={settings.maximum_interval}
+              onChange={handleMaxIntervalChange}
             />
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
               Caps the maximum spacing (in days) between card reviews. Default is 36500 (approx. 100 years).
             </span>
+          </div>
+
+          {/* Re-drill placement: where a still-learning card reappears within the same session. */}
+          <div className="form-group">
+            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Repeat size={14} /> Learning Re-drill Placement
+            </label>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {([
+                { mode: 'spread' as RedrillMode, title: 'Spread', desc: 'Reappears a few cards later' },
+                { mode: 'append' as RedrillMode, title: 'Append', desc: 'Reappears at the end' },
+              ]).map(({ mode, title, desc }) => {
+                const active = settings.redrill_mode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => handleRedrillModeChange(mode)}
+                    className="btn"
+                    style={{
+                      flex: 1,
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      gap: '2px',
+                      textAlign: 'left',
+                      padding: '10px 12px',
+                      borderStyle: 'solid',
+                      borderWidth: '1px',
+                      background: active ? 'rgba(139, 92, 246, 0.12)' : 'var(--bg-surface)',
+                      borderColor: active ? 'var(--color-primary)' : 'var(--border-color)',
+                      color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.9rem', fontWeight: 700 }}>{title}</span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 500 }}>{desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {settings.redrill_mode === 'spread' && (
+              <div style={{ marginTop: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <label className="form-label" style={{ marginBottom: 0, whiteSpace: 'nowrap' }}>
+                    Cards ahead
+                  </label>
+                  <input
+                    type="number"
+                    className="form-control"
+                    min="1"
+                    max="50"
+                    value={settings.redrill_offset}
+                    onChange={handleRedrillOffsetChange}
+                    style={{ maxWidth: '100px' }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '6px', background: 'rgba(255,255,255,0.02)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-color)', marginTop: '8px', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+              <Info size={14} style={{ flexShrink: 0, marginTop: '2px', color: 'var(--color-secondary)' }} />
+              <span>
+                When you rate a card that's still being learned (e.g. “Again”, or a passing grade on a
+                new card), it comes back later in the same session. <strong>Spread</strong> re-shows it
+                a set number of cards ahead for a tight repetition; <strong>Append</strong> pushes it to
+                the end so you clear everything else first.
+              </span>
+            </div>
           </div>
         </div>
 

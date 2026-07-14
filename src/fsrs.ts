@@ -3,10 +3,13 @@ import type { Card as FSRSCard, Grade } from 'ts-fsrs';
 import type { CardProgress, FSRSSettings, ProgrammeSettings } from './types';
 import { db } from './db';
 
-// Default settings
+// Default settings. `redrill_mode: 'spread'` / offset 3 reproduces the pre-navigation behaviour
+// (a learning card re-shown ~3 cards later).
 const DEFAULT_SETTINGS: FSRSSettings = {
   request_retention: 0.90,
-  maximum_interval: 36500
+  maximum_interval: 36500,
+  redrill_mode: 'spread',
+  redrill_offset: 3
 };
 
 /**
@@ -19,7 +22,12 @@ export function getFSRSSettings(): FSRSSettings {
     const parsed = JSON.parse(stored);
     return {
       request_retention: typeof parsed.request_retention === 'number' ? parsed.request_retention : DEFAULT_SETTINGS.request_retention,
-      maximum_interval: typeof parsed.maximum_interval === 'number' ? parsed.maximum_interval : DEFAULT_SETTINGS.maximum_interval
+      maximum_interval: typeof parsed.maximum_interval === 'number' ? parsed.maximum_interval : DEFAULT_SETTINGS.maximum_interval,
+      redrill_mode: parsed.redrill_mode === 'append' || parsed.redrill_mode === 'spread' ? parsed.redrill_mode : DEFAULT_SETTINGS.redrill_mode,
+      // Clamp to a sane range; a broken/old value falls back to the default rather than NaN.
+      redrill_offset: typeof parsed.redrill_offset === 'number' && parsed.redrill_offset >= 1
+        ? Math.min(Math.floor(parsed.redrill_offset), 50)
+        : DEFAULT_SETTINGS.redrill_offset
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -67,7 +75,10 @@ export function deriveFSRSSettings(progSettings?: ProgrammeSettings): FSRSSettin
 
   return {
     request_retention: progSettings.target_retention,
-    maximum_interval: maxInterval
+    maximum_interval: maxInterval,
+    // Re-drill behaviour is a global preference, not a per-programme one — carry it through.
+    redrill_mode: globalSettings.redrill_mode,
+    redrill_offset: globalSettings.redrill_offset
   };
 }
 
