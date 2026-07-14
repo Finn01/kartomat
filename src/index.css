@@ -472,23 +472,21 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid var(--border-color);
   border-radius: 28px;
   box-shadow: var(--shadow-lg);
-  min-height: 380px;
-  /* The whole card scrolls as one unit once its content exceeds the viewport-clamped max-height */
+  /* Height is set inline: the card fills the space between the header and the control bar. The
+     whole card scrolls as one unit once its content exceeds that. */
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  transition: border-color 0.3s ease, box-shadow 0.3s ease, height 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-/* Card swap: apply the new card's size instantly instead of animating from the old card's height */
-.flashcard-3d.no-height-anim {
   transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .flashcard-3d-content {
   padding: 24px;
-  min-height: 380px;
+  /* Fill the card exactly. A fixed min-height here asked for more height than the card's content
+     box (the card's own min-height is border-box, so its borders eat into it), which is why the
+     inspector showed the content box overhanging its parent. */
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: space-between;

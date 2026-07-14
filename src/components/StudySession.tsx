@@ -184,12 +184,6 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   // Reference to the live card so we can freeze its height while it flicks away.
   const baseCardRef = useRef<HTMLDivElement>(null);
 
-  // Measure the card's natural content height so we can animate growth (e.g. on answer reveal)
-  // as a smooth downward extension instead of an instant layout jump.
-  const cardContentRef = useRef<HTMLDivElement>(null);
-  const [cardContentHeight, setCardContentHeight] = useState<number | null>(null);
-  const [skipHeightAnim, setSkipHeightAnim] = useState(true);
-
   // Query database in raw format (we'll process this once on mount/deck change)
   const allCards = useLiveQuery(() => db.cards.toArray());
   const allProgress = useLiveQuery(() => db.progress.toArray());
@@ -224,42 +218,19 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     return () => ro.disconnect();
   }, [loading]);
 
-  // Measure where the card actually starts. Re-runs whenever anything above it could have moved
-  // (header resize, viewport/orientation change), which is all that determines this position — the
-  // card's own height never feeds back into it, so there's no measurement loop.
+  // Measure where the card actually starts, as a *layout* offset from the session overlay (its
+  // nearest positioned ancestor). Deliberately offsetTop and not getBoundingClientRect(): the
+  // overlay slides in under `transform: translateY(100%)`, and a client rect includes ancestor
+  // transforms — measuring mid-animation reported the card as being below the viewport, which
+  // drove the available height negative and collapsed the card to its 200px floor.
+  // Re-runs whenever anything above the card could have moved; the card's own height never feeds
+  // back into this, so there's no measurement loop.
   useLayoutEffect(() => {
     const el = cardWrapperRef.current;
     if (!el) return;
-    setCardWrapperTop(el.getBoundingClientRect().top);
+    setCardWrapperTop(el.offsetTop);
   }, [loading, headerHeight, viewportHeight]);
 
-  // The current visit's stable id — drives the height-snap effect below (a new card mounting)
-  // and, further down, the derived per-visit view state.
-  const activeVisitId = queue[currentIdx]?.visitId ?? null;
-
-  // Track the live card's natural content height and mirror it onto the outer card as an
-  // animated `height`, so growth (e.g. revealing the answer) reads as a fluid downward
-  // extension rather than an instant jump. Height changes triggered by swapping to a new
-  // card are applied without animation (see skipHeightAnim).
-  useLayoutEffect(() => {
-    const el = cardContentRef.current;
-    if (!el) {
-      setCardContentHeight(null);
-      return;
-    }
-    // A new card just mounted: snap to its size instead of animating from the old card's height.
-    setSkipHeightAnim(true);
-    const update = () => setCardContentHeight(el.offsetHeight);
-    update();
-    // Re-enable the grow/shrink animation once the initial size has been applied.
-    const enableAnim = requestAnimationFrame(() => setSkipHeightAnim(false));
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      cancelAnimationFrame(enableAnim);
-    };
-  }, [activeVisitId]);
 
   // Rebuild the queue only when the *inputs that define the session* change (deck selection or
   // the study-ahead toggle) — not on every progress write. This guard is reset in that effect's
@@ -953,21 +924,24 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   // rather than hardcoded offsets is what keeps it correct under viewport-fit=cover, where the
   // insets are non-zero and would otherwise be missed (top) or double-counted (bottom).
   const CARD_BOTTOM_GAP = 24;
-  const cardMaxHeightPx = Math.max(
+  const cardHeightPx = Math.max(
     200,
     viewportHeight - cardWrapperTop - footerHeight - CARD_BOTTOM_GAP,
   );
-  const cardMaxHeight = `${cardMaxHeightPx}px`;
+  // The card *fills* that space rather than hugging its content: a short card used to collapse to
+  // its 380px content floor, leaving a void between it and the control bar taller than the card
+  // itself. Overflowing content still scrolls inside the card, so nothing becomes unreachable.
+  const cardHeight = `${cardHeightPx}px`;
   const cardSizing: React.CSSProperties = {
-    maxHeight: cardMaxHeight,
-    minHeight: `min(380px, ${cardMaxHeight})`,
+    height: cardHeight,
+    maxHeight: cardHeight,
+    minHeight: cardHeight,
   };
-  // Animate the card's own height to its measured content height so growth (e.g. revealing the
-  // answer) reads as a fluid downward extension, right up to the viewport clamp.
-  const liveCardSizing: React.CSSProperties = {
-    ...cardSizing,
-    ...(cardContentHeight != null ? { height: `${Math.min(cardContentHeight, cardMaxHeightPx)}px` } : {}),
-  };
+  // A flicking card is pinned to the exact size it had when it left the deck, so the animation is
+  // immune to any resize underneath it. All three dimensions must be frozen together — overriding
+  // `height` alone would leave cardSizing's min/max fighting it.
+  const frozenCardSizing = (h: number | null): React.CSSProperties =>
+    h == null ? cardSizing : { height: `${h}px`, minHeight: `${h}px`, maxHeight: `${h}px` };
 
   // Interval previews for the current card's rating buttons (from its pre-review progress).
   const currentPreviews = currentItem ? getNextReviewPreviews(currentItem.progress, customFSRSSettings) : null;
@@ -1066,10 +1040,10 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
         {currentItem && (
           <div
             ref={baseCardRef}
-            className={`flashcard-3d ${showAnswer ? 'showing-answer' : 'studying'} ${skipHeightAnim ? 'no-height-anim' : ''}`}
-            style={liveCardSizing}
+            className={`flashcard-3d ${showAnswer ? 'showing-answer' : 'studying'}`}
+            style={cardSizing}
           >
-            <div ref={cardContentRef} className="flashcard-3d-content">
+            <div className="flashcard-3d-content">
               {renderCardFace(currentItem, {
                 showAnswer,
                 tfSelection,
@@ -1088,7 +1062,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
           <div className="card-flick-layer" style={{ ['--flick-color' as string]: flicking.color } as React.CSSProperties}>
             <div
               className={`flashcard-3d showing-answer card-flicking${flicking.graduated ? ' card-flicking-right' : ''}`}
-              style={{ ...cardSizing, height: flicking.height != null ? `${flicking.height}px` : undefined }}
+              style={frozenCardSizing(flicking.height)}
             >
               <div className="flashcard-3d-content">
                 {renderCardFace(flicking.item, {
@@ -1110,7 +1084,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
           <div className="card-flick-layer" style={{ ['--flick-color' as string]: flickingBack.color } as React.CSSProperties}>
             <div
               className={`flashcard-3d showing-answer card-flicking-back${flickingBack.graduated ? ' card-flicking-back-right' : ''}`}
-              style={{ ...cardSizing, height: flickingBack.height != null ? `${flickingBack.height}px` : undefined }}
+              style={frozenCardSizing(flickingBack.height)}
             >
               <div className="flashcard-3d-content">
                 {renderCardFace(flickingBack.item, {
