@@ -107,11 +107,13 @@ h1, h2, h3, h4, h5, h6 {
   min-height: 100vh;
   max-width: 800px;
   margin: 0 auto;
-  /* Respect phone safe-zones (notch top, home indicator bottom, side offsets) */
+  /* Respect phone safe-zones (notch top, home indicator bottom, side offsets). `max()` lets the
+     inset absorb the base padding rather than stacking on it, so we clear the system bars without
+     an over-generous gap. These only resolve to non-zero with viewport-fit=cover (see index.html). */
   padding-top: 0;
-  padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
-  padding-left: calc(16px + env(safe-area-inset-left, 0px));
-  padding-right: calc(16px + env(safe-area-inset-right, 0px));
+  padding-bottom: max(80px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
 
 /* Responsive Padding for Desktop */
@@ -144,12 +146,15 @@ h1, h2, h3, h4, h5, h6 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: calc(8px + env(safe-area-inset-top, 0px));
+  /* Top inset clears the notch; sides use max() to mirror .app-container's padding exactly, so the
+     negative bleed margins below cancel it out (a base+inset mismatch would over-bleed the header
+     off-screen in landscape). */
+  padding-top: max(8px, env(safe-area-inset-top, 0px));
   padding-bottom: 12px;
-  padding-left: calc(16px + env(safe-area-inset-left, 0px));
-  padding-right: calc(16px + env(safe-area-inset-right, 0px));
-  margin-left: calc(-16px - env(safe-area-inset-left, 0px));
-  margin-right: calc(-16px - env(safe-area-inset-right, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  margin-left: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+  margin-right: calc(-1 * max(16px, env(safe-area-inset-right, 0px)));
   background: rgba(8, 9, 13, 0.85);
   backdrop-filter: blur(var(--backdrop-blur));
   -webkit-backdrop-filter: blur(var(--backdrop-blur));
@@ -830,9 +835,12 @@ h1, h2, h3, h4, h5, h6 {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px calc(16px + env(safe-area-inset-right, 0px))
-           calc(10px + env(safe-area-inset-bottom, 0px))
-           calc(16px + env(safe-area-inset-left, 0px));
+  /* `max()` rather than `base + inset`: the home-indicator / gesture-bar inset absorbs the base
+     padding instead of stacking on top of it, so the controls clear the system nav bar without
+     leaving a needlessly generous gap above it. Requires viewport-fit=cover (see index.html). */
+  padding: 10px max(16px, env(safe-area-inset-right, 0px))
+           max(10px, env(safe-area-inset-bottom, 0px))
+           max(16px, env(safe-area-inset-left, 0px));
   background: rgba(8, 9, 13, 0.92);
   backdrop-filter: blur(var(--backdrop-blur));
   -webkit-backdrop-filter: blur(var(--backdrop-blur));

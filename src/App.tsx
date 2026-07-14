@@ -294,7 +294,11 @@ function App() {
       {/* Fixed Overlay Study Session */}
       {sessionState !== 'closed' && (
         <div className={`study-session-overlay ${sessionState}`}>
-          <div className="app-container" style={{ minHeight: 'auto', paddingTop: '12px', paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))' }}>
+          {/* viewport-fit=cover lets this fixed overlay extend under the notch and home indicator.
+              The insets are carried by the elements that need them, not this container: the session's
+              sticky header pads its own top (so its background covers the notch strip even when
+              pinned), and the fixed control bar pads its own bottom. */}
+          <div className="app-container" style={{ minHeight: 'auto', paddingTop: '0px', paddingBottom: '0px' }}>
             <StudySession 
               deckIds={sessionDeckIds} 
               customFSRSSettings={customFSRSSettings}

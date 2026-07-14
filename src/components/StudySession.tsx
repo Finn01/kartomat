@@ -154,9 +154,17 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   const [headerHeight, setHeaderHeight] = useState(72);
 
   // Measure the fixed bottom control bar (rating buttons + Back/Forward) so the card is sized to
-  // sit above it — the card and the controls must never overlap.
+  // sit above it — the card and the controls must never overlap. Its offsetHeight already includes
+  // its own safe-area bottom padding, so reserving it also clears the home indicator.
   const footerRef = useRef<HTMLDivElement>(null);
   const [footerHeight, setFooterHeight] = useState(148);
+
+  // The card wrapper's top edge in viewport coordinates. Measured rather than derived, so the card
+  // sizing stays correct no matter what sits above it (sticky header, the overlay container's
+  // safe-area top padding under viewport-fit=cover, etc.) — hardcoding that stack was what let the
+  // card run under the control bar.
+  const cardWrapperRef = useRef<HTMLDivElement>(null);
+  const [cardWrapperTop, setCardWrapperTop] = useState(120);
 
   // Track viewport height numerically (in addition to the CSS dvh clamp) so we can cap the
   // animated card height in JS — animating toward a value beyond the CSS max-height would be
@@ -215,6 +223,15 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     ro.observe(el);
     return () => ro.disconnect();
   }, [loading]);
+
+  // Measure where the card actually starts. Re-runs whenever anything above it could have moved
+  // (header resize, viewport/orientation change), which is all that determines this position — the
+  // card's own height never feeds back into it, so there's no measurement loop.
+  useLayoutEffect(() => {
+    const el = cardWrapperRef.current;
+    if (!el) return;
+    setCardWrapperTop(el.getBoundingClientRect().top);
+  }, [loading, headerHeight, viewportHeight]);
 
   // The current visit's stable id — drives the height-snap effect below (a new card mounting)
   // and, further down, the derived per-visit view state.
@@ -928,21 +945,23 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   const remainingCount = queue.length - ratedCount;
   const progressPercent = queue.length > 0 ? Math.round((ratedCount / queue.length) * 100) : 100;
 
-  // Size the card to fit between the sticky header and the fixed bottom control bar, so the card
-  // and the controls never overlap. Besides the measured header/footer we must also reserve the
-  // flex gap under the header (20px) and the .card-wrapper's own top+bottom margin (16px each),
-  // plus a few px so the card's bottom border clears the bar. The card scrolls internally, so
-  // clamping here only affects how far it extends, not what content is reachable.
-  const cardVReserve = headerHeight + footerHeight + 56;
-  const cardMaxHeight = `calc(100dvh - ${cardVReserve}px - env(safe-area-inset-bottom, 0px))`;
+  // Size the card to fit exactly between where it starts and the top of the fixed control bar, so
+  // the two can never overlap. Both ends are *measured*: `cardWrapperTop` is the card's real
+  // viewport position (absorbing the header, the flex gap, and any safe-area top padding above it),
+  // and `footerHeight` already includes the bar's own safe-area bottom padding. CARD_BOTTOM_GAP
+  // covers the wrapper's bottom margin plus a little clearance. Deriving this from measurements
+  // rather than hardcoded offsets is what keeps it correct under viewport-fit=cover, where the
+  // insets are non-zero and would otherwise be missed (top) or double-counted (bottom).
+  const CARD_BOTTOM_GAP = 24;
+  const cardMaxHeightPx = Math.max(
+    200,
+    viewportHeight - cardWrapperTop - footerHeight - CARD_BOTTOM_GAP,
+  );
+  const cardMaxHeight = `${cardMaxHeightPx}px`;
   const cardSizing: React.CSSProperties = {
     maxHeight: cardMaxHeight,
     minHeight: `min(380px, ${cardMaxHeight})`,
   };
-  // Numeric twin of cardMaxHeight, used to clamp the animated height target below — animating
-  // `height` toward a value beyond the CSS max-height would just be clipped instantly with no
-  // visible transition, so we cap the JS target at the same limit.
-  const cardMaxHeightPx = Math.max(200, viewportHeight - cardVReserve);
   // Animate the card's own height to its measured content height so growth (e.g. revealing the
   // answer) reads as a fluid downward extension, right up to the viewport clamp.
   const liveCardSizing: React.CSSProperties = {
@@ -992,7 +1011,10 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
         className="session-sticky-header"
         style={{
           background: 'var(--bg-app)',
-          paddingTop: '12px',
+          // Carry the notch inset here rather than on the container: this element's own background
+          // then covers the notch strip, including while it's pinned (sticky top: 0). `max()` keeps
+          // the gap tight — the inset absorbs the 12px base instead of stacking on it.
+          paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
           paddingBottom: '12px',
           display: 'flex',
           flexDirection: 'column',
@@ -1040,7 +1062,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
       </div>
 
       {/* Flashcard container (stacks the flicking card over the next one being revealed) */}
-      <div className="card-wrapper">
+      <div ref={cardWrapperRef} className="card-wrapper">
         {currentItem && (
           <div
             ref={baseCardRef}
