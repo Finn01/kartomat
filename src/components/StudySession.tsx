@@ -218,6 +218,26 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
     return () => ro.disconnect();
   }, [loading]);
 
+  // The visitId currently on screen. Derived up here, above the loading/completion early returns,
+  // so the scroll-reset layout effect below can key off it (`currentItem` is only available after
+  // those returns, where hooks can no longer be declared).
+  const visibleVisitId = queue[currentIdx]?.visitId ?? '';
+
+  // Reset both scroll containers whenever the card on screen changes. Neither is remounted between
+  // visits — React reuses the same `.flashcard-3d` and `.study-session-overlay` DOM nodes — so
+  // their `scrollTop` carried over from the previous card. When the incoming card is shorter the
+  // scroll range collapses to ~0, and the stale offset stays painted on a composited layer that the
+  // browser never re-clamps: the content renders shifted up with no scroll range left to bring it
+  // back. Stepping forward and back only appeared to "fix" it because that forced a fresh layout.
+  // Must be declared *before* the measurement effect below — layout effects run in declaration
+  // order, and that one reads the overlay's scrollTop.
+  useLayoutEffect(() => {
+    const card = baseCardRef.current;
+    if (card) card.scrollTop = 0;
+    const overlay = cardWrapperRef.current?.offsetParent;
+    if (overlay instanceof HTMLElement) overlay.scrollTop = 0;
+  }, [visibleVisitId]);
+
   // Measure where the card actually starts, as a *layout* offset from the session overlay (its
   // nearest positioned ancestor). Deliberately offsetTop and not getBoundingClientRect(): the
   // overlay slides in under `transform: translateY(100%)`, and a client rect includes ancestor
@@ -228,8 +248,13 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   useLayoutEffect(() => {
     const el = cardWrapperRef.current;
     if (!el) return;
-    setCardWrapperTop(el.offsetTop);
-  }, [loading, headerHeight, viewportHeight]);
+    // `offsetTop` is relative to the overlay's *content* origin, so it only equals the card's
+    // viewport position while the overlay sits at the top of its scroll range. Subtracting the
+    // overlay's own scroll offset keeps the height math honest if it is ever scrolled.
+    const parent = el.offsetParent;
+    const scrolled = parent instanceof HTMLElement ? parent.scrollTop : 0;
+    setCardWrapperTop(el.offsetTop - scrolled);
+  }, [loading, headerHeight, viewportHeight, visibleVisitId]);
 
 
   // Rebuild the queue only when the *inputs that define the session* change (deck selection or
