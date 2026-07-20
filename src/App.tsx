@@ -10,7 +10,7 @@ import { deriveFSRSSettings } from './fsrs';
 import type { FSRSSettings } from './types';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { RubberBandContent } from './components/RubberBandContent';
-import { useBodyScrollLock } from './hooks/useBodyScrollLock';
+import { useBodyScrollLock, useIsBodyScrollLocked } from './hooks/useBodyScrollLock';
 
 function App() {
   const [activeTab, setActiveTab] = useState<'learn' | 'decks'>('learn');
@@ -67,6 +67,12 @@ function App() {
   // Study Session Entry/Exit State
   const [sessionState, setSessionState] = useState<'closed' | 'entering' | 'active' | 'exiting'>('closed');
   useBodyScrollLock(sessionState !== 'closed');
+
+  // True while *anything* (this overlay, or any modal) has the body pinned. The page-level
+  // rubber-band gesture has to stand down for the whole time: with the body `position: fixed`
+  // the page reads as both scrolled-to-top and scrolled-to-bottom, so it would classify every
+  // touch inside the overlay as an overscroll pull and preventDefault the overlay's own scroll.
+  const bodyScrollLocked = useIsBodyScrollLocked();
 
   useEffect(() => {
     const el = sliderContainerRef.current;
@@ -246,7 +252,7 @@ function App() {
       </header>
 
       {/* Main Content Area */}
-      <RubberBandContent disabled={sessionState !== 'closed'}>
+      <RubberBandContent disabled={sessionState !== 'closed' || bodyScrollLocked}>
         {/* Segmented Tab Switcher */}
         <div className="tab-switcher">
           <button 

@@ -130,6 +130,7 @@ export const RubberBandContent: React.FC<RubberBandContentProps> = ({ children, 
   useEffect(() => {
     if (disabled) {
       touchStateRef.current = 'idle';
+      isTouchActiveRef.current = false;
       setIsTransitioning(false);
       setTranslateY(0);
     }
