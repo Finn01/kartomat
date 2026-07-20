@@ -355,8 +355,9 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
   const allRated = queue.length > 0 && queue.every(item => answers[item.visitId] !== undefined);
 
   // Handle empty queue / fully-rated session — but let a final flick finish playing first, and keep
-  // the session UI up while an undo offer is open so the *last* rating stays undoable (the
-  // completion screen would otherwise hide the Undo button).
+  // the session UI up while an undo offer is open (the completion screen would otherwise hide the
+  // Undo button mid-window). The session-ending rating deliberately opens no undo offer at all, so
+  // in practice this guard no longer defers the completion screen — it's kept as a safety net.
   if ((queue.length === 0 || allRated) && !flicking && !undoVisitId) {
     // Nothing was ever reviewed this session: either the deck had nothing due to begin with,
     // or "Study ahead" is on but everything upcoming has now been reviewed too.
@@ -549,6 +550,7 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
       const q = projectedQueue[idx];
       return q.visitId !== visitId && answers[q.visitId] === undefined;
     };
+    const anyUnratedLeft = projectedQueue.some((_, idx) => isUnrated(idx));
     setCurrentIdx(prevIdx => {
       for (let idx = prevIdx + 1; idx < projectedQueue.length; idx++) {
         if (isUnrated(idx)) return idx;
@@ -568,11 +570,16 @@ export const StudySession: React.FC<StudySessionProps> = ({ deckIds, customFSRSS
 
     // 7. Open the 3-second Undo window on this rating (the Back button becomes "Undo"). The timer
     //    just retires the offer; the actual revert lives in handleUndo.
-    setUndoVisitId(visitId);
-    undoTimerRef.current = setTimeout(() => {
-      undoTimerRef.current = null;
-      setUndoVisitId(null);
-    }, UNDO_WINDOW_MS);
+    //    Skipped on the *last* card of the session: an open undo offer holds the session UI up
+    //    (see the completion check above), so offering it there would stall the completion screen
+    //    behind a 3-second countdown on a card the user has already finished with.
+    if (anyUnratedLeft) {
+      setUndoVisitId(visitId);
+      undoTimerRef.current = setTimeout(() => {
+        undoTimerRef.current = null;
+        setUndoVisitId(null);
+      }, UNDO_WINDOW_MS);
+    }
   };
 
   // Fully revert the most recent rating (only available during its 3s window). Undoes every effect
