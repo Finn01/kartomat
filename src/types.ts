@@ -10,6 +10,21 @@ export interface Deck {
     kartentypen?: Record<string, string>;
   };
   createdAt: number;
+  // Optional folder this deck is filed under (unset = top level).
+  folderId?: string;
+  // `false` keeps the deck out of the main study programme (global session + summary).
+  // Unset counts as active, so decks created before this field existed stay active.
+  active?: boolean;
+}
+
+// Flat (single-level) grouping of decks. Deactivating a folder pauses every deck inside it
+// without touching the decks' own `active` flags, so re-activating restores the prior state.
+export interface Folder {
+  id: string;
+  name: string;
+  active?: boolean; // unset = active
+  collapsed?: boolean; // UI state, persisted so the Decks tab looks the same on reopen
+  createdAt: number;
 }
 
 export type CardType = 'basic' | 'cloze' | 'truefalse' | 'correction' | 'cluster';

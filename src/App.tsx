@@ -11,6 +11,7 @@ import type { FSRSSettings } from './types';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { RubberBandContent } from './components/RubberBandContent';
 import { useBodyScrollLock, useIsBodyScrollLocked } from './hooks/useBodyScrollLock';
+import { useActiveDeckIds } from './hooks/useActiveDeckIds';
 
 function App() {
   const [activeTab, setActiveTab] = useState<'learn' | 'decks'>('learn');
@@ -164,12 +165,14 @@ function App() {
   const cards = useLiveQuery(() => db.cards.toArray());
   const progressList = useLiveQuery(() => db.progress.toArray());
 
-  // Count total cards due in the database
+  // Count cards due in the main study programme (active decks only)
+  const activeDeckIds = useActiveDeckIds();
   const getGlobalDueCount = () => {
-    if (!cards || !progressList) return 0;
+    if (!cards || !progressList || !activeDeckIds) return 0;
     const now = new Date();
     let due = 0;
     for (const card of cards) {
+      if (!activeDeckIds.includes(card.deckId)) continue;
       const prog = progressList.find(p => p.cardId === card.id);
       if (prog && new Date(prog.due) <= now) {
         due++;

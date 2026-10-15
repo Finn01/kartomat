@@ -1,12 +1,13 @@
 import Dexie from 'dexie';
 import type { Table } from 'dexie';
-import type { Deck, Flashcard, CardProgress, LearningProgramme } from './types';
+import type { Deck, Folder, Flashcard, CardProgress, LearningProgramme } from './types';
 
 export class KartomatDatabase extends Dexie {
   decks!: Table<Deck>;
   cards!: Table<Flashcard>;
   progress!: Table<CardProgress>;
   programmes!: Table<LearningProgramme>;
+  folders!: Table<Folder>;
 
   constructor() {
     super('KartomatDatabase');
@@ -15,6 +16,11 @@ export class KartomatDatabase extends Dexie {
       cards: 'id, deckId, type, createdAt',
       progress: 'cardId, deckId, due, state',
       programmes: 'id, createdAt'
+    });
+    // v2: deck folders. Decks gain optional `folderId`/`active` fields, which need no index
+    // (they're only ever read alongside the full deck list), so only the new table is declared.
+    this.version(2).stores({
+      folders: 'id, createdAt'
     });
   }
 }
@@ -46,7 +52,10 @@ export async function importDeckJson(parsedData: any) {
           hinweis_falschaussagen: meta.hinweis_falschaussagen || deckData.meta?.hinweis_falschaussagen,
           kartentypen: meta.kartentypen || deckData.meta?.kartentypen
         },
-        createdAt: existingDeck?.createdAt || Date.now()
+        createdAt: existingDeck?.createdAt || Date.now(),
+        // Re-importing a deck must not undo the user's local organisation.
+        folderId: existingDeck?.folderId,
+        active: existingDeck?.active
       };
       await db.decks.put(deck);
 
@@ -99,6 +108,7 @@ export async function exportBackupJson(): Promise<string> {
   const cards = await db.cards.toArray();
   const progressList = await db.progress.toArray();
   const programmes = await db.programmes.toArray();
+  const folders = await db.folders.toArray();
 
   const backup = {
     exportDate: new Date().toISOString(),
@@ -109,6 +119,8 @@ export async function exportBackupJson(): Promise<string> {
         id: d.id,
         titel: d.titel,
         meta: d.meta,
+        folderId: d.folderId,
+        active: d.active,
         cards: deckCards.map(c => {
           const prog = progressList.find(p => p.cardId === c.id);
           return {
@@ -128,7 +140,8 @@ export async function exportBackupJson(): Promise<string> {
         })
       };
     }),
-    learning_programmes: programmes
+    learning_programmes: programmes,
+    folders
   };
 
   return JSON.stringify(backup, null, 2);
@@ -140,20 +153,34 @@ export async function exportBackupJson(): Promise<string> {
 export async function restoreBackupJson(backupData: any) {
   const decksList = backupData.decks || [];
   const programmes = backupData.learning_programmes || [];
+  const folders = backupData.folders || [];
 
-  await db.transaction('rw', [db.decks, db.cards, db.progress, db.programmes], async () => {
+  await db.transaction('rw', [db.decks, db.cards, db.progress, db.programmes, db.folders], async () => {
     // Clear existing data to ensure full restore
     await db.decks.clear();
     await db.cards.clear();
     await db.progress.clear();
     await db.programmes.clear();
+    await db.folders.clear();
+
+    for (const folder of folders) {
+      await db.folders.put({
+        id: folder.id,
+        name: folder.name,
+        active: folder.active,
+        collapsed: folder.collapsed,
+        createdAt: folder.createdAt || Date.now()
+      });
+    }
 
     for (const deckData of decksList) {
       const deck: Deck = {
         id: deckData.id,
         titel: deckData.titel,
         meta: deckData.meta || {},
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        folderId: deckData.folderId,
+        active: deckData.active
       };
       await db.decks.put(deck);
 

@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { Play, Plus, Trash2, Calendar, Layers, Pencil } from 'lucide-react';
+import { Play, Plus, Trash2, Calendar, Layers, Pencil, EyeOff } from 'lucide-react';
 import type { LearningProgramme } from '../types';
 import { Modal } from './Modal';
+import { useActiveDeckIds } from '../hooks/useActiveDeckIds';
 
 interface ProgrammeItemProps {
   prog: LearningProgramme;
@@ -433,44 +434,6 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
   const progressList = useLiveQuery(() => db.progress.toArray());
   const programmes = useLiveQuery(() => db.programmes.toArray());
 
-  // Calculate Statistics
-  const getStats = () => {
-    if (!cards || !progressList) return { due: 0, newCards: 0, learning: 0, total: 0 };
-    
-    let due = 0;
-    let newCards = 0;
-    let learning = 0;
-    const now = new Date();
-
-    for (const card of cards) {
-      const prog = progressList.find(p => p.cardId === card.id);
-      if (!prog) {
-        newCards++;
-      } else {
-        const isDue = new Date(prog.due) <= now;
-        // ts-fsrs states: 0=New, 1=Learning, 2=Review, 3=Relearning
-        if (prog.state === 1 || prog.state === 3) {
-          learning++;
-        }
-        
-        // If it is due, increment due count.
-        // In FSRS, learning cards might also have a due date in the past, so they're counted.
-        if (isDue) {
-          due++;
-        }
-      }
-    }
-
-    return {
-      due,
-      newCards,
-      learning,
-      total: cards.length
-    };
-  };
-
-  const stats = getStats();
-
   // Calculate stats for a specific set of decks (e.g. for a programme)
   const getDeckSetStats = (deckIds: string[]) => {
     if (!cards || !progressList) return { due: 0, newCards: 0, learning: 0, total: 0 };
@@ -496,6 +459,13 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
 
     return { due, newCards, learning, total: filteredCards.length };
   };
+
+  // The main study programme only covers active decks (a deck is inactive if it, or its folder,
+  // has been switched off in the Decks tab). Custom programmes below pick their decks explicitly
+  // and are deliberately unaffected.
+  const activeDeckIds = useActiveDeckIds();
+  const stats = getDeckSetStats(activeDeckIds ?? []);
+  const inactiveDeckCount = decks && activeDeckIds ? decks.length - activeDeckIds.length : 0;
 
   const resetProgrammeForm = () => {
     setNewProgName('');
@@ -640,7 +610,7 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
               Start Studying
             </button>
           ) : (
-            <button className="btn btn-primary" onClick={() => onStartSession(null)} style={{ width: '100%' }}>
+            <button className="btn btn-primary" onClick={() => onStartSession(activeDeckIds ?? [])} style={{ width: '100%' }}>
               <Play size={16} fill="currentColor" />
               Start Studying
             </button>
@@ -651,6 +621,12 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ onStartSession }) => {
               {stats.newCards} New
             </span>
           </div>
+          {inactiveDeckCount > 0 && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <EyeOff size={12} />
+              {inactiveDeckCount} deck{inactiveDeckCount === 1 ? '' : 's'} paused · manage in Decks
+            </span>
+          )}
         </div>
       </div>
 
