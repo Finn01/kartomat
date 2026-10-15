@@ -321,7 +321,7 @@ h1, h2, h3, h4, h5, h6 {
 .modal-content {
   width: 100%;
   max-width: 500px;
-  max-height: 85vh;
+  max-height: min(100%, 85vh); /* 100% tracks the keyboard-aware overlay height (see Modal.tsx) */
   overflow-y: auto;
   border-radius: 24px;
   background: var(--bg-surface);

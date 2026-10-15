@@ -267,35 +267,45 @@ export const DeckList: React.FC<DeckListProps> = () => {
     const dueTotal = folderDecks.reduce((sum, d) => sum + getDeckStats(d.id).due, 0);
     return (
       <div key={folder.id} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <div className="glass-panel" style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div className="glass-panel" style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Line 1: the full folder name, free to wrap */}
           <button
             type="button"
-            className="btn-icon"
             aria-label={collapsed ? `Expand ${folder.name}` : `Collapse ${folder.name}`}
             aria-expanded={!collapsed}
             onClick={() => db.folders.update(folder.id, { collapsed: !collapsed })}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0, background: 'none', border: 'none', padding: 0, textAlign: 'left', color: 'inherit', cursor: 'pointer', opacity: folderOn ? 1 : 0.55 }}
+            style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', width: '100%', background: 'none', border: 'none', padding: 0, textAlign: 'left', color: 'inherit', cursor: 'pointer', opacity: folderOn ? 1 : 0.55 }}
           >
-            {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-            <Folder size={16} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
-            <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folder.name}</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', flexShrink: 0 }}>
-              {folderDecks.length} deck{folderDecks.length === 1 ? '' : 's'}
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, height: '1.4em' }}>
+              {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+              <Folder size={16} style={{ color: 'var(--color-primary)' }} />
             </span>
-            {folderOn && dueTotal > 0 && <span className="pill pill-due" style={{ flexShrink: 0 }}>{dueTotal} Due</span>}
-            {!folderOn && <span className="pill pill-total" style={{ flexShrink: 0 }}>Paused</span>}
+            <span style={{ fontWeight: 600, lineHeight: 1.4, overflowWrap: 'anywhere', minWidth: 0 }}>{folder.name}</span>
           </button>
-          <button type="button" className="btn-icon" aria-label={`Rename ${folder.name}`} title="Rename folder" onClick={() => openFolderModal(folder)}>
-            <Pencil size={14} />
-          </button>
-          <button type="button" className="btn-icon" aria-label={`Delete ${folder.name}`} title="Delete folder" onClick={() => setDeletingFolderId(folder.id)}>
-            <Trash2 size={14} />
-          </button>
-          <Switch
-            checked={folderOn}
-            onChange={(checked) => db.folders.update(folder.id, { active: checked })}
-            label={folderOn ? 'In study programme — click to pause all decks in this folder' : 'Paused — click to include this folder in study programme'}
-          />
+
+          {/* Line 2: summary on the left, actions on the right */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px', minWidth: 0, opacity: folderOn ? 1 : 0.55 }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {folderDecks.length} deck{folderDecks.length === 1 ? '' : 's'}
+              </span>
+              {folderOn && dueTotal > 0 && <span className="pill pill-due">{dueTotal} Due</span>}
+              {!folderOn && <span className="pill pill-total">Paused</span>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+              <button type="button" className="btn-icon" aria-label={`Rename ${folder.name}`} title="Rename folder" style={{ width: 32, height: 32, borderRadius: 10 }} onClick={() => openFolderModal(folder)}>
+                <Pencil size={14} />
+              </button>
+              <button type="button" className="btn-icon" aria-label={`Delete ${folder.name}`} title="Delete folder" style={{ width: 32, height: 32, borderRadius: 10 }} onClick={() => setDeletingFolderId(folder.id)}>
+                <Trash2 size={14} />
+              </button>
+              <Switch
+                checked={folderOn}
+                onChange={(checked) => db.folders.update(folder.id, { active: checked })}
+                label={folderOn ? 'In study programme — click to pause all decks in this folder' : 'Paused — click to include this folder in study programme'}
+              />
+            </div>
+          </div>
         </div>
 
         {!collapsed && (
